@@ -72,6 +72,7 @@ import {
 
 import {
     initUsageManager,
+    loadUsage,
     refreshUsage
 } from './usage-manager.js';
 
@@ -81,6 +82,7 @@ import {
 
 import {
     initPluginManager,
+    loadPlugins,
     togglePlugin
 } from './plugin-manager.js';
 
@@ -91,6 +93,35 @@ import {
 import {
     CustomModelsManager
 } from './custom-models-manager.js';
+import { createSectionInitializer } from './performance-utils.js';
+
+const sectionInitializers = createSectionInitializer({
+    config: async () => {
+        await loadConfiguration();
+    },
+    'custom-models': async () => {
+        if (window.customModelsManager) {
+            await window.customModelsManager.load();
+        }
+    },
+    'upload-config': async () => {
+        initUploadConfigManager();
+    },
+    usage: async () => {
+        initUsageManager();
+    },
+    plugins: async () => {
+        initPluginManager();
+    }
+});
+
+function getActiveSectionId() {
+    return document.querySelector('.section.active')?.id || 'dashboard';
+}
+
+async function ensureSectionInitialized(sectionId = getActiveSectionId()) {
+    return sectionInitializers.ensureInitialized(sectionId);
+}
 
 /**
  * 加载初始数据
@@ -98,9 +129,20 @@ import {
 function loadInitialData() {
     loadSystemInfo();
     loadProviders();
-    loadConfiguration();
-    if (window.customModelsManager) {
-        window.customModelsManager.load();
+    const activeSectionId = getActiveSectionId();
+
+    if (sectionInitializers.isInitialized(activeSectionId)) {
+        if (activeSectionId === 'config') {
+            loadConfiguration();
+        } else if (activeSectionId === 'custom-models' && window.customModelsManager) {
+            window.customModelsManager.load();
+        } else if (activeSectionId === 'upload-config') {
+            loadConfigList();
+        } else if (activeSectionId === 'usage') {
+            loadUsage();
+        } else if (activeSectionId === 'plugins') {
+            loadPlugins();
+        }
     }
 }
 
@@ -126,10 +168,7 @@ function initApp() {
     initEventStream();
     initFileUpload(); // 初始化文件上传功能
     initRoutingExamples(); // 初始化路径路由示例功能
-    initUploadConfigManager(); // 初始化配置管理功能
-    initUsageManager(); // 初始化用量管理功能
     initImageZoom(); // 初始化图片放大功能
-    initPluginManager(); // 初始化插件管理功能
     initTutorialManager(); // 初始化教程管理功能
     
     // 初始化自定义模型管理
@@ -137,6 +176,7 @@ function initApp() {
     
     initMobileMenu(); // 初始化移动端菜单
     loadInitialData();
+    void ensureSectionInitialized('dashboard');
     
     // 显示欢迎消息
     showToast(t('common.success'), t('common.welcome'), 'success');
@@ -165,6 +205,13 @@ function initApp() {
     }, REFRESH_INTERVALS.SYSTEM_INFO);
 
 }
+
+window.addEventListener('sectionChanged', event => {
+    const sectionId = event.detail?.sectionId;
+    if (sectionId) {
+        void ensureSectionInitialized(sectionId);
+    }
+});
 
 /**
  * 初始化移动端菜单
@@ -258,6 +305,7 @@ window.generateApiKey = generateApiKey;
 
 // 用量管理相关全局函数
 window.refreshUsage = refreshUsage;
+window.isSectionInitialized = sectionId => sectionInitializers.isInitialized(sectionId);
 
 // 插件管理相关全局函数
 window.togglePlugin = togglePlugin;

@@ -2,6 +2,19 @@
 
 import { eventSource, setEventSource, elements, addLog, autoScroll } from './constants.js';
 import { t } from './i18n.js';
+import { createDebouncedTask } from './performance-utils.js';
+
+const debouncedProviderRefresh = createDebouncedTask(() => {
+    if (typeof loadProviders === 'function') {
+        loadProviders();
+    }
+}, 300);
+
+const debouncedConfigRefresh = createDebouncedTask(() => {
+    if (loadConfigList && window.isSectionInitialized?.('upload-config')) {
+        loadConfigList();
+    }
+}, 300);
 
 /**
  * Server-Sent Events初始化
@@ -105,10 +118,7 @@ function updateServerStatus(connected) {
  * @param {Object} data - 提供商数据
  */
 function updateProviderStatus(data) {
-    // 触发重新加载提供商列表
-    if (typeof loadProviders === 'function') {
-        loadProviders();
-    }
+    debouncedProviderRefresh(data);
 }
 
 /**
@@ -124,10 +134,7 @@ function handleProviderUpdate(data) {
                 refreshProviderConfig(data.providerType);
             }
         } else {
-            // 否则更新主界面的提供商列表
-            if (typeof loadProviders === 'function') {
-                loadProviders();
-            }
+            debouncedProviderRefresh(data);
         }
     }
 }
@@ -159,28 +166,16 @@ function handleConfigUpdate(data) {
     // 根据操作类型进行相应处理
     switch (data.action) {
         case 'delete':
-            // 文件删除事件，直接刷新配置文件列表
-            if (loadConfigList) {
-                loadConfigList();
-                console.log('[ConfigUpdate] 配置文件列表已刷新（文件删除）');
-            }
+            debouncedConfigRefresh();
             break;
             
         case 'add':
         case 'update':
-            // 文件添加或更新事件，刷新配置文件列表
-            if (loadConfigList) {
-                loadConfigList();
-                console.log('[ConfigUpdate] 配置文件列表已刷新（文件更新）');
-            }
+            debouncedConfigRefresh();
             break;
             
         default:
-            // 未知操作类型，也刷新列表以确保同步
-            if (loadConfigList) {
-                loadConfigList();
-                console.log('[ConfigUpdate] 配置文件列表已刷新（默认）');
-            }
+            debouncedConfigRefresh();
             break;
     }
 }

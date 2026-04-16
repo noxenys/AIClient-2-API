@@ -14,6 +14,9 @@ const PROVIDERS_WITHOUT_USAGE_DISPLAY = [
 
 // 提供商配置缓存
 let currentProviderConfigs = null;
+let usageManagerInitialized = false;
+let usageDataCache = null;
+let supportedProvidersCache = null;
 
 /**
  * 更新提供商配置
@@ -21,9 +24,15 @@ let currentProviderConfigs = null;
  */
 export function updateUsageProviderConfigs(configs) {
     currentProviderConfigs = configs;
-    // 重新触发列表加载，以应用最新的可见性过滤、名称和图标
-    loadSupportedProviders();
-    loadUsage();
+
+    if (supportedProvidersCache) {
+        renderSupportedProvidersList(supportedProvidersCache);
+    }
+
+    if (usageDataCache) {
+        const contentEl = document.getElementById('usageContent');
+        renderUsageData(usageDataCache, contentEl);
+    }
 }
 
 /**
@@ -39,14 +48,52 @@ function shouldShowUsage(providerType) {
  * 初始化用量管理功能
  */
 export function initUsageManager() {
+    if (usageManagerInitialized) {
+        return;
+    }
+
+    usageManagerInitialized = true;
     const refreshBtn = document.getElementById('refreshUsageBtn');
     if (refreshBtn) {
         refreshBtn.addEventListener('click', refreshUsage);
     }
     
-    // 初始化时自动加载缓存数据
     loadUsage();
     loadSupportedProviders();
+}
+
+function renderSupportedProvidersList(providers = []) {
+    const listEl = document.getElementById('supportedProvidersList');
+    if (!listEl) return;
+
+    listEl.innerHTML = '';
+    
+    // 按照 currentProviderConfigs 的顺序渲染，确保顺序一致性
+    const displayOrder = currentProviderConfigs
+        ? currentProviderConfigs.map(c => c.id)
+        : providers;
+
+    displayOrder.forEach(providerId => {
+        const isSupported = providers.includes(providerId);
+        if (!isSupported) return;
+
+        if (currentProviderConfigs) {
+            const config = currentProviderConfigs.find(c => c.id === providerId);
+            if (config && config.visible === false) return;
+        }
+
+        const tag = document.createElement('span');
+        tag.className = 'provider-tag';
+        tag.textContent = getProviderDisplayName(providerId);
+        tag.title = t('usage.doubleClickToRefresh') || '双击刷新该提供商用量';
+        tag.setAttribute('data-i18n-title', 'usage.doubleClickToRefresh');
+        
+        tag.addEventListener('dblclick', () => {
+            refreshProviderUsage(providerId);
+        });
+        
+        listEl.appendChild(tag);
+    });
 }
 
 /**
@@ -66,38 +113,8 @@ async function loadSupportedProviders() {
             throw new Error(`HTTP ${response.status}`);
         }
 
-        const providers = await response.json();
-        
-        listEl.innerHTML = '';
-        
-        // 按照 currentProviderConfigs 的顺序渲染，确保顺序一致性
-        const displayOrder = currentProviderConfigs 
-            ? currentProviderConfigs.map(c => c.id) 
-            : providers;
-
-        displayOrder.forEach(providerId => {
-            // 必须是后端支持且前端配置可见的提供商
-            const isSupported = providers.includes(providerId);
-            if (!isSupported) return;
-
-            if (currentProviderConfigs) {
-                const config = currentProviderConfigs.find(c => c.id === providerId);
-                if (config && config.visible === false) return;
-            }
-
-            const tag = document.createElement('span');
-            tag.className = 'provider-tag';
-            tag.textContent = getProviderDisplayName(providerId);
-            tag.title = t('usage.doubleClickToRefresh') || '双击刷新该提供商用量';
-            tag.setAttribute('data-i18n-title', 'usage.doubleClickToRefresh');
-            
-            // 添加双击事件
-            tag.addEventListener('dblclick', () => {
-                refreshProviderUsage(providerId);
-            });
-            
-            listEl.appendChild(tag);
-        });
+        supportedProvidersCache = await response.json();
+        renderSupportedProvidersList(supportedProvidersCache);
     } catch (error) {
         console.error('获取支持的提供商列表失败:', error);
         listEl.innerHTML = `<span class="error-text" data-i18n="usage.failedToLoad">${t('usage.failedToLoad')}</span>`;
@@ -131,6 +148,7 @@ export async function loadUsage() {
         }
 
         const data = await response.json();
+        usageDataCache = data;
         
         // 隐藏加载状态
         if (loadingEl) loadingEl.style.display = 'none';
@@ -202,6 +220,7 @@ export async function refreshUsage() {
         }
 
         const data = await response.json();
+        usageDataCache = data;
         
         // 隐藏加载状态
         if (loadingEl) loadingEl.style.display = 'none';

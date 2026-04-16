@@ -7,6 +7,7 @@ import { t } from './i18n.js';
 
 // 提供商配置缓存
 let currentProviderConfigs = null;
+let currentConfigData = null;
 
 /**
  * 更新提供商配置并重新渲染配置页面的提供商选择标签
@@ -38,9 +39,10 @@ function updateConfigProviderConfigs(configs) {
     if (scheduledHealthCheckProvidersEl) {
         renderProviderTags(scheduledHealthCheckProvidersEl, configs, false);
     }
-    
-    // 重新加载当前配置以恢复选中状态
-    loadConfiguration();
+
+    if (currentConfigData) {
+        syncProviderTagSelections(currentConfigData);
+    }
 }
 
 /**
@@ -126,6 +128,84 @@ function updatePinnedStatus(container) {
     });
 }
 
+function applySelectedProviderTags(container, selectedValues = [], options = {}) {
+    if (!container) return;
+
+    const values = Array.isArray(selectedValues) ? selectedValues : [];
+    const tags = Array.from(container.querySelectorAll('.provider-tag'));
+
+    if (options.reorderSelected) {
+        values.forEach(id => {
+            const tag = tags.find(item => item.getAttribute('data-value') === id);
+            if (tag) {
+                tag.classList.add('selected');
+                container.appendChild(tag);
+            }
+        });
+
+        tags.forEach(tag => {
+            const value = tag.getAttribute('data-value');
+            if (!values.includes(value)) {
+                tag.classList.remove('selected');
+                container.appendChild(tag);
+            }
+        });
+
+        if (options.ensureOneSelected) {
+            const anySelected = Array.from(container.querySelectorAll('.provider-tag.selected')).length > 0;
+            if (!anySelected && tags.length > 0) {
+                tags[0].classList.add('selected');
+            }
+        }
+
+        if (options.updatePinnedStatus) {
+            updatePinnedStatus(container);
+        }
+        return;
+    }
+
+    tags.forEach(tag => {
+        const value = tag.getAttribute('data-value');
+        if (values.includes(value)) {
+            tag.classList.add('selected');
+        } else {
+            tag.classList.remove('selected');
+        }
+    });
+}
+
+function syncProviderTagSelections(data) {
+    const modelProviderEl = document.getElementById('modelProvider');
+    if (modelProviderEl) {
+        const providers = Array.isArray(data.DEFAULT_MODEL_PROVIDERS)
+            ? data.DEFAULT_MODEL_PROVIDERS
+            : (typeof data.MODEL_PROVIDER === 'string' ? data.MODEL_PROVIDER.split(',') : []);
+        applySelectedProviderTags(modelProviderEl, providers, {
+            reorderSelected: true,
+            ensureOneSelected: true,
+            updatePinnedStatus: true
+        });
+    }
+
+    const proxyProvidersEl = document.getElementById('proxyProviders');
+    if (proxyProvidersEl) {
+        applySelectedProviderTags(proxyProvidersEl, data.PROXY_ENABLED_PROVIDERS || []);
+    }
+
+    const tlsSidecarProvidersEl = document.getElementById('tlsSidecarProviders');
+    if (tlsSidecarProvidersEl) {
+        applySelectedProviderTags(tlsSidecarProvidersEl, data.TLS_SIDECAR_ENABLED_PROVIDERS || []);
+    }
+
+    const scheduledHealthCheckProvidersEl = document.getElementById('scheduledHealthCheckProviders');
+    if (scheduledHealthCheckProvidersEl) {
+        applySelectedProviderTags(
+            scheduledHealthCheckProvidersEl,
+            data.SCHEDULED_HEALTH_CHECK?.providerTypes || []
+        );
+    }
+}
+
 /**
  * 初始化系统提示词替换规则 UI
  */
@@ -173,6 +253,7 @@ function addReplacementRow(oldVal = '', newVal = '') {
 async function loadConfiguration() {
     try {
         const data = await window.apiClient.get('/config');
+        currentConfigData = data;
 
         // 初始化替换规则 UI
         initReplacementsUI();
@@ -196,42 +277,8 @@ async function loadConfiguration() {
         if (apiKeyEl) apiKeyEl.value = data.REQUIRED_API_KEY || '';
         if (hostEl) hostEl.value = data.HOST || '127.0.0.1';
         if (portEl) portEl.value = data.SERVER_PORT || 3000;
-        
-        if (modelProviderEl) {
-            // 处理多选 MODEL_PROVIDER
-            const providers = Array.isArray(data.DEFAULT_MODEL_PROVIDERS)
-                ? data.DEFAULT_MODEL_PROVIDERS
-                : (typeof data.MODEL_PROVIDER === 'string' ? data.MODEL_PROVIDER.split(',') : []);
-            
-            const tags = Array.from(modelProviderEl.querySelectorAll('.provider-tag'));
-            
-            // 按照 providers 数组的顺序重新排列 DOM 中的标签
-            providers.forEach(id => {
-                const tag = tags.find(t => t.getAttribute('data-value') === id);
-                if (tag) {
-                    tag.classList.add('selected');
-                    modelProviderEl.appendChild(tag); // 依次移到末尾实现重排
-                }
-            });
-            
-            // 处理未选中的标签
-            tags.forEach(tag => {
-                const value = tag.getAttribute('data-value');
-                if (!providers.includes(value)) {
-                    tag.classList.remove('selected');
-                    modelProviderEl.appendChild(tag); // 移到最后
-                }
-            });
-            
-            // 如果没有任何选中的，默认选中第一个（保持兼容性）
-            const anySelected = Array.from(modelProviderEl.querySelectorAll('.provider-tag.selected')).length > 0;
-            if (!anySelected && tags.length > 0) {
-                tags[0].classList.add('selected');
-            }
-            
-            // 更新置顶视觉样式
-            updatePinnedStatus(modelProviderEl);
-        }
+
+        syncProviderTagSelections(data);
         
         if (systemPromptEl) systemPromptEl.value = data.systemPrompt || '';
 
@@ -294,22 +341,6 @@ async function loadConfiguration() {
         const proxyUrlEl = document.getElementById('proxyUrl');
         if (proxyUrlEl) proxyUrlEl.value = data.PROXY_URL || '';
         
-        // 加载启用代理的提供商 (标签按钮)
-        const proxyProvidersEl = document.getElementById('proxyProviders');
-        if (proxyProvidersEl) {
-            const enabledProviders = data.PROXY_ENABLED_PROVIDERS || [];
-            const proxyTags = proxyProvidersEl.querySelectorAll('.provider-tag');
-            
-            proxyTags.forEach(tag => {
-                const value = tag.getAttribute('data-value');
-                if (enabledProviders.includes(value)) {
-                    tag.classList.add('selected');
-                } else {
-                    tag.classList.remove('selected');
-                }
-            });
-        }
-        
         // 加载日志配置
         const logEnabledEl = document.getElementById('logEnabled');
         const logOutputModeEl = document.getElementById('logOutputMode');
@@ -333,24 +364,9 @@ async function loadConfiguration() {
         const tlsSidecarEnabledEl = document.getElementById('tlsSidecarEnabled');
         const tlsSidecarPortEl = document.getElementById('tlsSidecarPort');
         const tlsSidecarProxyUrlEl = document.getElementById('tlsSidecarProxyUrl');
-        const tlsSidecarProvidersEl = document.getElementById('tlsSidecarProviders');
-
         if (tlsSidecarEnabledEl) tlsSidecarEnabledEl.checked = data.TLS_SIDECAR_ENABLED || false;
         if (tlsSidecarPortEl) tlsSidecarPortEl.value = data.TLS_SIDECAR_PORT || 9090;
         if (tlsSidecarProxyUrlEl) tlsSidecarProxyUrlEl.value = data.TLS_SIDECAR_PROXY_URL || '';
-        
-        if (tlsSidecarProvidersEl) {
-            const enabledProviders = data.TLS_SIDECAR_ENABLED_PROVIDERS || [];
-            const tags = tlsSidecarProvidersEl.querySelectorAll('.provider-tag');
-            tags.forEach(tag => {
-                const value = tag.getAttribute('data-value');
-                if (enabledProviders.includes(value)) {
-                    tag.classList.add('selected');
-                } else {
-                    tag.classList.remove('selected');
-                }
-            });
-        }
         
         // 定时健康检查配置
         const scheduledHealthCheckEnabledEl = document.getElementById('scheduledHealthCheckEnabled');
@@ -365,21 +381,6 @@ async function loadConfiguration() {
             if (scheduledHealthCheckEnabledEl) scheduledHealthCheckEnabledEl.checked = true;
             if (scheduledHealthCheckStartupRunEl) scheduledHealthCheckStartupRunEl.checked = true;
             if (scheduledHealthCheckIntervalEl) scheduledHealthCheckIntervalEl.value = 600000;
-        }
-        
-        // 加载定时健康检查的供应商选择
-        const scheduledHealthCheckProvidersEl = document.getElementById('scheduledHealthCheckProviders');
-        if (scheduledHealthCheckProvidersEl) {
-            const enabledProviders = data.SCHEDULED_HEALTH_CHECK?.providerTypes || [];
-            const tags = scheduledHealthCheckProvidersEl.querySelectorAll('.provider-tag');
-            tags.forEach(tag => {
-                const value = tag.getAttribute('data-value');
-                if (enabledProviders.includes(value)) {
-                    tag.classList.add('selected');
-                } else {
-                    tag.classList.remove('selected');
-                }
-            });
         }
         
         // 定时健康检查间隔快捷按钮（防止重复绑定）

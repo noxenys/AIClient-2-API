@@ -2,6 +2,12 @@
 
 import { elements } from './constants.js';
 
+function emitSectionChanged(sectionId) {
+    window.dispatchEvent(new CustomEvent('sectionChanged', {
+        detail: { sectionId }
+    }));
+}
+
 /**
  * 初始化导航功能
  */
@@ -37,6 +43,8 @@ function initNavigation() {
                     }
                 }
             });
+
+            emitSectionChanged(sectionId);
 
             // 滚动到顶部
             scrollToTop();
@@ -74,6 +82,8 @@ function switchToSection(sectionId) {
             }
         }
     });
+
+    emitSectionChanged(sectionId);
 
     // 滚动到顶部
     scrollToTop();
