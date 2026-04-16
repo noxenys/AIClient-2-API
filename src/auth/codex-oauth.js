@@ -171,7 +171,8 @@ class CodexAuth {
             last_refresh: new Date().toISOString(),
             email: claims.email,
             type: 'codex',
-            expired: new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString()
+            expired: new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString(),
+            plan_type: this.extractPlanType(claims)
         };
 
         // 保存凭据并获取路径
@@ -249,7 +250,8 @@ class CodexAuth {
             last_refresh: new Date().toISOString(),
             email: claims.email,
             type: 'codex',
-            expired: new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString()
+            expired: new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString(),
+            plan_type: this.extractPlanType(claims)
         };
 
         await this.saveCredentials(credentials);
@@ -457,7 +459,8 @@ class CodexAuth {
                 last_refresh: new Date().toISOString(),
                 email: claims.email,
                 type: 'codex',
-                expired: new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString()
+                expired: new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString(),
+                plan_type: this.extractPlanType(claims)
             };
         } catch (error) {
             logger.error(`${CODEX_OAUTH_CONFIG.logPrefix} Token refresh failed:`, error.response?.data || error.message);
@@ -484,6 +487,14 @@ class CodexAuth {
             logger.error(`${CODEX_OAUTH_CONFIG.logPrefix} Failed to parse JWT:`, error.message);
             throw new Error(`Failed to parse JWT token: ${error.message}`);
         }
+    }
+
+    extractPlanType(claims = {}) {
+        return String(
+            claims['https://api.openai.com/auth']?.chatgpt_plan_type ||
+            claims.chatgpt_plan_type ||
+            ''
+        ).trim().toLowerCase();
     }
 
     /**
@@ -716,7 +727,8 @@ export async function batchImportCodexTokensStream(tokens, onProgress = null, sk
                 last_refresh: new Date().toISOString(),
                 email: email,
                 type: 'codex',
-                expired: new Date(Date.now() + (tokenData.expires_in || 3600) * 1000).toISOString()
+                expired: new Date(Date.now() + (tokenData.expires_in || 3600) * 1000).toISOString(),
+                plan_type: auth.extractPlanType(claims)
             };
 
             // 保存凭据

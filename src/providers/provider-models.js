@@ -145,7 +145,9 @@ export const PROVIDER_MODELS = {
 export const MANAGED_MODEL_LIST_PROVIDERS = [
     'openai-custom',
     'openaiResponses-custom',
-    'claude-custom'
+    'claude-custom',
+    'openai-codex-oauth',
+    'grok-custom'
 ];
 
 export function getManagedModelListProviderType(providerType) {

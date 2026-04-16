@@ -2,15 +2,18 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import logger from '../utils/logger.js';
 import { getRequestBody } from '../utils/common.js';
 import {
-    extractModelIdsFromNativeList,
     getConfiguredSupportedModels,
     getProviderModels,
     normalizeModelIds,
     usesManagedModelList
 } from '../providers/provider-models.js';
+import {
+    detectAvailableModelsForProvider,
+    inferSupportedModelsFromProviderConfig
+} from '../providers/provider-detection.js';
 import { generateUUID, createProviderConfig, formatSystemPath, detectProviderFromPath, addToUsedPaths, isPathUsed, pathsEqual } from '../utils/provider-utils.js';
 import { broadcastEvent } from './event-broadcast.js';
-import { getRegisteredProviders, getServiceAdapter, invalidateServiceAdapter, serviceInstances } from '../providers/adapter.js';
+import { getRegisteredProviders, invalidateServiceAdapter } from '../providers/adapter.js';
 
 // 文件级互斥锁：防止并发读写导致数据丢失
 // 安全净化：移除用户输入字段中的危险内容（script、事件处理器、javascript:协议等），
@@ -414,12 +417,6 @@ export async function handleGetProviderTypeModels(req, res, currentConfig, provi
  */
 export async function handleDetectProviderModels(req, res, currentConfig, providerPoolManager, providerType, providerUuid) {
     try {
-        if (!usesManagedModelList(providerType)) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: { message: `Model detection is not supported for provider type: ${providerType}` } }));
-            return true;
-        }
-
         const body = await getRequestBody(req);
         const draftConfig = filterMaskedData(body?.providerConfig || {});
 
@@ -437,19 +434,7 @@ export async function handleDetectProviderModels(req, res, currentConfig, provid
             uuid: detectionUuid
         };
 
-        let models = [];
-        try {
-            delete serviceInstances[instanceKey];
-            const serviceAdapter = getServiceAdapter(tempConfig);
-            if (typeof serviceAdapter.listModels !== 'function') {
-                throw new Error(`Provider ${providerType} does not support model detection`);
-            }
-
-            const nativeModels = await serviceAdapter.listModels();
-            models = extractModelIdsFromNativeList(nativeModels, providerType);
-        } finally {
-            delete serviceInstances[instanceKey];
-        }
+        const models = await detectAvailableModelsForProvider(providerType, tempConfig, { instanceKey });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -1369,11 +1354,16 @@ export async function handleQuickLinkProvider(req, res, currentConfig, providerP
             }
 
             // Create new provider config based on provider type
+            const supportedModels = await inferSupportedModelsFromProviderConfig(providerType, {
+                [credPathKey]: formatSystemPath(currentFilePath)
+            });
+
             const newProvider = createProviderConfig({
                 credPathKey,
                 credPath: formatSystemPath(currentFilePath),
                 defaultCheckModel,
-                needsProjectId: providerMapping.needsProjectId
+                needsProjectId: providerMapping.needsProjectId,
+                supportedModels
             });
 
             providerPools[providerType].push(newProvider);

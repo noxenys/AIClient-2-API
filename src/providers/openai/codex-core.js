@@ -29,6 +29,7 @@ export class CodexApiService {
         this.email = null;
         this.expiresAt = null;
         this.idToken = null;
+        this.planType = null;
         this.last_refresh = null;
         this.credsPath = null; // 记录本次加载/使用的凭据文件路径，确保刷新后写回同一文件
         this.uuid = config.uuid; // 保存 uuid 用于号池管理
@@ -97,6 +98,7 @@ export class CodexApiService {
             this.credsPath = credsPath;
 
             this.idToken = creds.id_token || this.idToken;
+            this.planType = creds.plan_type || this.planType;
             this.accessToken = creds.access_token;
             this.refreshToken = creds.refresh_token;
             this.accountId = creds.account_id;
@@ -442,6 +444,7 @@ export class CodexApiService {
             const newTokens = await refreshCodexTokensWithRetry(this.refreshToken, this.config);
 
             this.idToken = newTokens.id_token || this.idToken;
+            this.planType = newTokens.plan_type || this.planType;
             this.accessToken = newTokens.access_token;
             this.refreshToken = newTokens.refresh_token;
             this.accountId = newTokens.account_id;
@@ -535,7 +538,8 @@ export class CodexApiService {
                     last_refresh: this.last_refresh || new Date().toISOString(),
                     email: this.email,
                     type: 'codex',
-                    expired: this.expiresAt.toISOString()
+                    expired: this.expiresAt.toISOString(),
+                    plan_type: this.planType || ''
                 },
                 null,
                 2

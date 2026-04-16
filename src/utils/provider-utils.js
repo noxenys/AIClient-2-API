@@ -330,7 +330,7 @@ export async function isValidOAuthCredentials(filePath) {
  * @returns {Object} 新的提供商配置对象
  */
 export function createProviderConfig(options) {
-    const { credPathKey, credPath, defaultCheckModel, defaultCheckHealth, needsProjectId, urlKeys } = options;
+    const { credPathKey, credPath, defaultCheckModel, defaultCheckHealth, needsProjectId, urlKeys, supportedModels } = options;
     
     const newProvider = {
         [credPathKey]: credPath,
@@ -347,6 +347,10 @@ export function createProviderConfig(options) {
         lastHealthCheckModel: null,
         lastErrorMessage: null
     };
+
+    if (Array.isArray(supportedModels) && supportedModels.length > 0) {
+        newProvider.supportedModels = supportedModels;
+    }
     
     // 如果需要 PROJECT_ID，添加空字符串占位
     if (needsProjectId) {

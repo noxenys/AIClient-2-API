@@ -13,6 +13,7 @@ import {
     getFileName,
     formatSystemPath
 } from '../utils/provider-utils.js';
+import { inferSupportedModelsFromProviderConfig } from '../providers/provider-detection.js';
 import { MODEL_PROVIDER } from '../utils/constants.js';
 
 // 存储 ProviderPoolManager 实例
@@ -182,11 +183,16 @@ async function linkSingleCredential(config, credPath) {
         }
         
         // 创建新的提供商配置
+        const supportedModels = await inferSupportedModelsFromProviderConfig(providerType, {
+            [credPathKey]: formatSystemPath(relativePath)
+        });
+
         const newProvider = createProviderConfig({
             credPathKey,
             credPath: formatSystemPath(relativePath),
             defaultCheckModel,
-            needsProjectId
+            needsProjectId,
+            supportedModels
         });
         
         // 添加到配置
@@ -236,11 +242,16 @@ async function scanProviderDirectory(dirPath, linkedPaths, newProviders, options
                     
                     if (!isLinked) {
                         // 使用公共方法创建新的提供商配置
+                        const supportedModels = await inferSupportedModelsFromProviderConfig(providerType, {
+                            [credPathKey]: formatSystemPath(relativePath)
+                        });
+
                         const newProvider = createProviderConfig({
                             credPathKey,
                             credPath: formatSystemPath(relativePath),
                             defaultCheckModel,
-                            needsProjectId
+                            needsProjectId,
+                            supportedModels
                         });
                         
                         newProviders.push(newProvider);
