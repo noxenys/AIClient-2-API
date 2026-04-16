@@ -4,9 +4,59 @@ import { serviceInstances, getServiceAdapter } from '../providers/adapter.js';
 import { formatKiroUsage, formatGeminiUsage, formatAntigravityUsage, formatCodexUsage, formatGrokUsage } from '../services/usage-service.js';
 import { readUsageCache, writeUsageCache, readProviderUsageCache, updateProviderUsageCache } from './usage-cache.js';
 import { PROVIDER_MAPPINGS } from '../utils/provider-utils.js';
+import { isProviderStateSelectable } from '../utils/provider-state.js';
 import path from 'path';
 
 const supportedProviders = ['claude-kiro-oauth', 'gemini-cli-oauth', 'gemini-antigravity', 'openai-codex-oauth', 'grok-custom'];
+const DEFAULT_USAGE_QUERY_TIMEOUT_MS = 8000;
+const DEFAULT_USAGE_QUERY_CONCURRENCY = 4;
+
+export function shouldQueryUsageForProvider(provider = {}) {
+    if (provider.isDisabled) {
+        return false;
+    }
+
+    if (provider.state) {
+        return isProviderStateSelectable(provider.state);
+    }
+
+    return provider.isHealthy !== false;
+}
+
+async function withUsageTimeout(promise, timeoutMs = DEFAULT_USAGE_QUERY_TIMEOUT_MS) {
+    let timeoutId = null;
+
+    try {
+        return await Promise.race([
+            promise,
+            new Promise((_, reject) => {
+                timeoutId = setTimeout(() => {
+                    reject(new Error(`Usage query timeout after ${timeoutMs}ms`));
+                }, timeoutMs);
+            })
+        ]);
+    } finally {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+    }
+}
+
+async function runWithConcurrency(items, limit, handler) {
+    const results = new Array(items.length);
+    let cursor = 0;
+
+    async function worker() {
+        while (cursor < items.length) {
+            const index = cursor++;
+            results[index] = await handler(items[index], index);
+        }
+    }
+
+    const workerCount = Math.max(1, Math.min(limit, items.length));
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
+    return results;
+}
 
 
 /**
@@ -75,8 +125,10 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
 
     result.totalCount = providers.length;
 
-    // 遍历所有提供商实例获取用量
-    for (const provider of providers) {
+    const usageQueryConcurrency = currentConfig.USAGE_QUERY_CONCURRENCY || DEFAULT_USAGE_QUERY_CONCURRENCY;
+    const usageQueryTimeoutMs = currentConfig.USAGE_QUERY_TIMEOUT_MS || DEFAULT_USAGE_QUERY_TIMEOUT_MS;
+
+    const instanceResults = await runWithConcurrency(providers, usageQueryConcurrency, async (provider) => {
         const providerKey = providerType + (provider.uuid || '');
         let adapter = serviceInstances[providerKey];
         
@@ -91,11 +143,14 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             error: null
         };
 
-        // First check if disabled, skip initialization for disabled providers
-        if (provider.isDisabled) {
-            instanceResult.error = 'Provider is disabled';
-            result.errorCount++;
-        } else if (!adapter) {
+        if (!shouldQueryUsageForProvider(provider)) {
+            instanceResult.error = provider.isDisabled
+                ? 'Provider is disabled'
+                : `Provider skipped in state: ${provider.state || 'unhealthy'}`;
+            return instanceResult;
+        }
+
+        if (!adapter) {
             // Service instance not initialized, try auto-initialization
             try {
                 logger.info(`[Usage API] Auto-initializing service adapter for ${providerType}: ${provider.uuid}`);
@@ -109,25 +164,30 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             } catch (initError) {
                 logger.error(`[Usage API] Failed to initialize adapter for ${providerType}: ${provider.uuid}:`, initError.message);
                 instanceResult.error = `Service instance initialization failed: ${initError.message}`;
-                result.errorCount++;
+                return instanceResult;
             }
         }
         
         // If adapter exists (including just initialized), and no error, try to get usage
         if (adapter && !instanceResult.error) {
             try {
-                const usage = await getAdapterUsage(adapter, providerType);
+                const usage = await withUsageTimeout(
+                    getAdapterUsage(adapter, providerType),
+                    usageQueryTimeoutMs
+                );
                 instanceResult.success = true;
                 instanceResult.usage = usage;
-                result.successCount++;
             } catch (error) {
                 instanceResult.error = error.message;
-                result.errorCount++;
             }
         }
 
-        result.instances.push(instanceResult);
-    }
+        return instanceResult;
+    });
+
+    result.instances.push(...instanceResults);
+    result.successCount = instanceResults.filter(item => item.success).length;
+    result.errorCount = instanceResults.filter(item => !item.success).length;
 
     return result;
 }
