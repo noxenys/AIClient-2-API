@@ -18,6 +18,48 @@ let initialUptime = null;
 let initialLoadTime = null;
 let isStaticProviderConfigsUpdated = false;
 let cachedSupportedProviders = null;
+let cachedProvidersSnapshot = null;
+let lastProvidersListRenderKey = null;
+let lastDashboardRenderKey = null;
+
+function getActiveSectionId() {
+    return document.querySelector('.section.active')?.id || 'dashboard';
+}
+
+function isSectionActive(sectionId) {
+    return getActiveSectionId() === sectionId;
+}
+
+function summarizeProviderState(account) {
+    if (account.isDisabled) return 'disabled';
+    if (account.state) return account.state;
+    if (account.isHealthy) return 'healthy';
+    return 'risky';
+}
+
+function buildProviderListRenderKey(sortedProviderTypes, providers, configMap, searchTerm) {
+    return sortedProviderTypes.map(providerType => {
+        if (configMap[providerType] && configMap[providerType].visible === false) {
+            return `${providerType}:hidden`;
+        }
+
+        const accounts = providers[providerType] || [];
+        const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
+        const totalCount = accounts.length;
+        const usageCount = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
+        const errorCount = accounts.reduce((sum, acc) => sum + (acc.errorCount || 0), 0);
+        return `${providerType}:${totalCount}:${healthyCount}:${usageCount}:${errorCount}`;
+    }).join('|') + `#search:${searchTerm}`;
+}
+
+function buildDashboardRenderKey(sortedProviderTypes, providers) {
+    return sortedProviderTypes.map(providerType => {
+        const accounts = providers[providerType] || [];
+        return `${providerType}:[${accounts.map(account =>
+            `${account.uuid}:${summarizeProviderState(account)}:${account.usageCount || 0}:${account.errorCount || 0}`
+        ).join(',')}]`;
+    }).join('|');
+}
 
 /**
  * 加载系统信息
@@ -188,6 +230,7 @@ async function loadProviders(forceRefreshSupported = false) {
         if (!data || !data.providers) return;
 
         const { providers, supportedProviders } = data;
+        cachedProvidersSnapshot = providers;
         
         // 检查支持列表是否发生了变化（或者是否尚未初始化）
         const isChanged = !cachedSupportedProviders || 
@@ -212,10 +255,18 @@ async function loadProviders(forceRefreshSupported = false) {
             isStaticProviderConfigsUpdated = true;
         }
 
-        renderProviders(providers, cachedSupportedProviders);
+        renderCachedProviderViews();
     } catch (error) {
         console.error('Failed to load providers:', error);
     }
+}
+
+function renderCachedProviderViews() {
+    if (!cachedProvidersSnapshot || !cachedSupportedProviders) {
+        return;
+    }
+
+    renderProviders(cachedProvidersSnapshot, cachedSupportedProviders);
 }
 
 /**
@@ -225,13 +276,13 @@ async function loadProviders(forceRefreshSupported = false) {
  */
 function renderProviders(providers, supportedProviders = []) {
     const container = document.getElementById('providersList');
-    if (!container) return;
-    
-    container.innerHTML = '';
+    const dashboardActive = isSectionActive('dashboard');
+    const providersActive = isSectionActive('providers');
+    if (!container && !dashboardActive) return;
 
     // 检查是否有提供商池数据
     const hasProviders = Object.keys(providers).length > 0;
-    const statsGrid = document.querySelector('#providers .stats-grid');
+    const statsGrid = providersActive ? document.querySelector('#providers .stats-grid') : null;
     
     // 始终显示统计卡片
     if (statsGrid) statsGrid.style.display = 'grid';
@@ -271,44 +322,20 @@ function renderProviders(providers, supportedProviders = []) {
     const searchInput = document.getElementById('providerSearchInput');
     const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
 
-    // 按照排序后的提供商类型渲染
-    sortedProviderTypes.forEach((providerType) => {
-        // 如果配置中明确设置为不显示，则跳过
+    sortedProviderTypes.forEach(providerType => {
         if (configMap[providerType] && configMap[providerType].visible === false) {
             return;
         }
 
         const accounts = hasProviders ? providers[providerType] || [] : [];
-
-        // 搜索过滤逻辑
-        if (searchTerm) {
-            const displayName = (configMap[providerType]?.name || providerType).toLowerCase();
-            const matchesType = displayName.includes(searchTerm) || providerType.toLowerCase().includes(searchTerm);
-            const matchesNodes = accounts.some(acc => 
-                (acc.customName || '').toLowerCase().includes(searchTerm) || 
-                (acc.uuid || '').toLowerCase().includes(searchTerm) ||
-                (acc.model || '').toLowerCase().includes(searchTerm)
-            );
-            
-            if (!matchesType && !matchesNodes) {
-                return;
-            }
-        }
-
-        const providerDiv = document.createElement('div');
-        providerDiv.className = 'provider-item';
-        providerDiv.dataset.providerType = providerType;
-        providerDiv.style.cursor = 'pointer';
-
         const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
         const totalCount = accounts.length;
         const usageCount = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
         const errorCount = accounts.reduce((sum, acc) => sum + (acc.errorCount || 0), 0);
-        
+
         totalAccounts += totalCount;
         totalHealthy += healthyCount;
 
-        // 更新全局统计变量
         if (!providerStats.providerTypeStats[providerType]) {
             providerStats.providerTypeStats[providerType] = {
                 totalAccounts: 0,
@@ -318,24 +345,67 @@ function renderProviders(providers, supportedProviders = []) {
                 lastUpdate: null
             };
         }
-        
+
         const typeStats = providerStats.providerTypeStats[providerType];
         typeStats.totalAccounts = totalCount;
         typeStats.healthyAccounts = healthyCount;
         typeStats.totalUsage = usageCount;
         typeStats.totalErrors = errorCount;
         typeStats.lastUpdate = new Date().toISOString();
+    });
 
-        // 为无数据状态设置特殊样式
-        const isEmptyState = !hasProviders || totalCount === 0;
-        const statusClass = isEmptyState ? 'status-empty' : (healthyCount === totalCount ? 'status-healthy' : 'status-unhealthy');
-        const statusIcon = isEmptyState ? 'fa-info-circle' : (healthyCount === totalCount ? 'fa-check-circle' : 'fa-exclamation-triangle');
-        const statusText = isEmptyState ? t('providers.status.empty') : t('providers.status.healthy', { healthy: healthyCount, total: totalCount });
+    const providerListRenderKey = buildProviderListRenderKey(sortedProviderTypes, providers, configMap, searchTerm);
+    const dashboardRenderKey = buildDashboardRenderKey(sortedProviderTypes, providers);
 
-        // 获取显示名称
-        const displayName = configMap[providerType]?.name || providerType;
+    if (providersActive && container && providerListRenderKey !== lastProvidersListRenderKey) {
+        container.innerHTML = '';
+    }
 
-        providerDiv.innerHTML = `
+    if (providersActive && container && providerListRenderKey !== lastProvidersListRenderKey) {
+        // 按照排序后的提供商类型渲染
+        sortedProviderTypes.forEach((providerType) => {
+            // 如果配置中明确设置为不显示，则跳过
+            if (configMap[providerType] && configMap[providerType].visible === false) {
+                return;
+            }
+
+            const accounts = hasProviders ? providers[providerType] || [] : [];
+
+            // 搜索过滤逻辑
+            if (searchTerm) {
+                const displayName = (configMap[providerType]?.name || providerType).toLowerCase();
+                const matchesType = displayName.includes(searchTerm) || providerType.toLowerCase().includes(searchTerm);
+                const matchesNodes = accounts.some(acc => 
+                    (acc.customName || '').toLowerCase().includes(searchTerm) || 
+                    (acc.uuid || '').toLowerCase().includes(searchTerm) ||
+                    (acc.model || '').toLowerCase().includes(searchTerm)
+                );
+                
+                if (!matchesType && !matchesNodes) {
+                    return;
+                }
+            }
+
+            const providerDiv = document.createElement('div');
+            providerDiv.className = 'provider-item';
+            providerDiv.dataset.providerType = providerType;
+            providerDiv.style.cursor = 'pointer';
+
+            const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
+            const totalCount = accounts.length;
+            const usageCount = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
+            const errorCount = accounts.reduce((sum, acc) => sum + (acc.errorCount || 0), 0);
+
+            // 为无数据状态设置特殊样式
+            const isEmptyState = !hasProviders || totalCount === 0;
+            const statusClass = isEmptyState ? 'status-empty' : (healthyCount === totalCount ? 'status-healthy' : 'status-unhealthy');
+            const statusIcon = isEmptyState ? 'fa-info-circle' : (healthyCount === totalCount ? 'fa-check-circle' : 'fa-exclamation-triangle');
+            const statusText = isEmptyState ? t('providers.status.empty') : t('providers.status.healthy', { healthy: healthyCount, total: totalCount });
+
+            // 获取显示名称
+            const displayName = configMap[providerType]?.name || providerType;
+
+            providerDiv.innerHTML = `
             <div class="provider-header">
                 <div class="provider-name">
                     <span class="provider-type-text">${displayName}</span>
@@ -369,27 +439,27 @@ function renderProviders(providers, supportedProviders = []) {
             </div>
         `;
 
-        // 如果是空状态，添加特殊样式
-        if (isEmptyState) {
-            providerDiv.classList.add('empty-provider');
-        }
+            // 如果是空状态，添加特殊样式
+            if (isEmptyState) {
+                providerDiv.classList.add('empty-provider');
+            }
 
-        // 添加点击事件 - 整个提供商组都可以点击
-        providerDiv.addEventListener('click', (e) => {
-            e.preventDefault();
-            openProviderManager(providerType);
-        });
+            // 添加点击事件 - 整个提供商组都可以点击
+            providerDiv.addEventListener('click', (e) => {
+                e.preventDefault();
+                openProviderManager(providerType);
+            });
 
-        container.appendChild(providerDiv);
-        
-        // 为添加分组按钮添加事件监听
-        const addGroupBtn = providerDiv.querySelector('.add-group-btn');
-        if (addGroupBtn) {
-            addGroupBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                
-                // 使用自定义的主题风格 Prompt
-                showSimplePrompt(
+            container.appendChild(providerDiv);
+            
+            // 为添加分组按钮添加事件监听
+            const addGroupBtn = providerDiv.querySelector('.add-group-btn');
+            if (addGroupBtn) {
+                addGroupBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    
+                    // 使用自定义的主题风格 Prompt
+                    showSimplePrompt(
                     t('providers.addGroup.title'),
                     t('providers.addGroup.suffixPlaceholder'),
                     async (suffix) => {
@@ -432,26 +502,33 @@ function renderProviders(providers, supportedProviders = []) {
                             addGroupBtn.innerHTML = originalHtml;
                         }
                     }
-                );
-            });
-        }
+                    );
+                });
+            }
 
-        // 为授权按钮添加事件监听
-        const authBtn = providerDiv.querySelector('.generate-auth-btn');
-        if (authBtn) {
-            authBtn.addEventListener('click', (e) => {
-                e.stopPropagation(); // 阻止事件冒泡到父元素
-                handleGenerateAuthUrl(providerType);
-            });
-        }
-    });
+            // 为授权按钮添加事件监听
+            const authBtn = providerDiv.querySelector('.generate-auth-btn');
+            if (authBtn) {
+                authBtn.addEventListener('click', (e) => {
+                    e.stopPropagation(); // 阻止事件冒泡到父元素
+                    handleGenerateAuthUrl(providerType);
+                });
+            }
+        });
+        lastProvidersListRenderKey = providerListRenderKey;
+    }
 
     // 更新统计卡片数据
-    const activeProviders = hasProviders ? Object.keys(providers).length : 0;
-    updateProviderStatsDisplay(activeProviders, totalHealthy, totalAccounts);
+    if (providersActive) {
+        const activeProviders = hasProviders ? Object.keys(providers).length : 0;
+        updateProviderStatsDisplay(activeProviders, totalHealthy, totalAccounts);
+    }
 
     // 渲染仪表盘提供商状态概览
-    renderProviderStatusOverview(providers, configMap, sortedProviderTypes);
+    if (dashboardActive && dashboardRenderKey !== lastDashboardRenderKey) {
+        renderProviderStatusOverview(providers, configMap, sortedProviderTypes);
+        lastDashboardRenderKey = dashboardRenderKey;
+    }
 }
 
 /**
@@ -3572,6 +3649,7 @@ export {
     loadSystemInfo,
     updateTimeDisplay,
     loadProviders,
+    renderCachedProviderViews,
     openProviderManager,
     showAuthModal,
     executeGenerateAuthUrl,

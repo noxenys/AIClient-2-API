@@ -38,6 +38,7 @@ import {
     loadSystemInfo,
     updateTimeDisplay,
     loadProviders,
+    renderCachedProviderViews,
     openProviderManager,
     showAuthModal,
     executeGenerateAuthUrl,
@@ -188,7 +189,10 @@ function initApp() {
     
     // 定期刷新系统信息
     setInterval(() => {
-        loadProviders();
+        const activeSectionId = getActiveSectionId();
+        if (activeSectionId === 'dashboard' || activeSectionId === 'providers') {
+            loadProviders();
+        }
 
         if (providerStats.activeProviders > 0) {
             const stats = getProviderStats(providerStats);
@@ -210,6 +214,9 @@ window.addEventListener('sectionChanged', event => {
     const sectionId = event.detail?.sectionId;
     if (sectionId) {
         void ensureSectionInitialized(sectionId);
+        if (sectionId === 'dashboard' || sectionId === 'providers') {
+            renderCachedProviderViews();
+        }
     }
 });
 

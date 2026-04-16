@@ -3,7 +3,12 @@
 import { elements, autoScroll, setAutoScroll, clearLogs } from './constants.js';
 import { showToast } from './utils.js';
 import { t } from './i18n.js';
-import { checkUpdate, performUpdate, loadProviders } from './provider-manager.js';
+import { checkUpdate, performUpdate, loadProviders, renderCachedProviderViews } from './provider-manager.js';
+import { createDebouncedTask } from './performance-utils.js';
+
+const debouncedProviderSearchRender = createDebouncedTask(() => {
+    renderCachedProviderViews();
+}, 120);
 
 /**
  * 初始化所有事件监听器
@@ -236,7 +241,7 @@ function initEventListeners() {
     const providerSearchInput = document.getElementById('providerSearchInput');
     if (providerSearchInput) {
         providerSearchInput.addEventListener('input', () => {
-            loadProviders();
+            debouncedProviderSearchRender();
         });
     }
 
