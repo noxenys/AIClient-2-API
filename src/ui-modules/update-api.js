@@ -9,7 +9,12 @@ import { parseProxyUrl } from '../utils/proxy-utils.js';
 import { getRequestBody } from '../utils/common.js';
 
 const execAsync = promisify(exec);
-const GITHUB_REPO = 'justlovemaki/AIClient-2-API';
+const DEFAULT_GITHUB_REPO = 'noxenys/AIClient-2-API';
+
+function getUpdateRepo() {
+    const repo = CONFIG?.UPDATE_GITHUB_REPO || process.env.UPDATE_GITHUB_REPO || DEFAULT_GITHUB_REPO;
+    return String(repo || DEFAULT_GITHUB_REPO).trim();
+}
 
 function buildGitHubApiCandidates(repo) {
     const apiPath = `repos/${repo}/tags`;
@@ -155,7 +160,8 @@ function compareVersions(v1, v2) {
  * @returns {Promise<string[]>} 版本列表
  */
 async function getVersionsFromGitHub(limit = 10) {
-    const candidates = buildGitHubApiCandidates(GITHUB_REPO);
+    const repo = getUpdateRepo();
+    const candidates = buildGitHubApiCandidates(repo);
     
     for (const candidate of candidates) {
         try {
