@@ -21,6 +21,7 @@ let cachedSupportedProviders = null;
 let cachedProvidersSnapshot = null;
 let lastProvidersListRenderKey = null;
 let lastDashboardRenderKey = null;
+let providerListInteractionsBound = false;
 
 function getActiveSectionId() {
     return document.querySelector('.section.active')?.id || 'dashboard';
@@ -59,6 +60,89 @@ function buildDashboardRenderKey(sortedProviderTypes, providers) {
             `${account.uuid}:${summarizeProviderState(account)}:${account.usageCount || 0}:${account.errorCount || 0}`
         ).join(',')}]`;
     }).join('|');
+}
+
+function bindProviderListInteractions(container) {
+    if (!container || providerListInteractionsBound) {
+        return;
+    }
+
+    providerListInteractionsBound = true;
+
+    container.addEventListener('click', async (event) => {
+        const addGroupBtn = event.target.closest('.add-group-btn');
+        if (addGroupBtn) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const providerItem = addGroupBtn.closest('.provider-item');
+            const providerType = providerItem?.dataset.providerType;
+            if (!providerType) return;
+
+            showSimplePrompt(
+                t('providers.addGroup.title'),
+                t('providers.addGroup.suffixPlaceholder'),
+                async (suffix) => {
+                    const cleanSuffix = suffix.toLowerCase().replace(/[^a-z0-9]/g, '');
+                    if (!cleanSuffix) {
+                        showToast(t('common.warning'), t('common.invalidSuffix'), 'warning');
+                        return;
+                    }
+
+                    const newProviderType = `${providerType}-${cleanSuffix}`;
+                    addGroupBtn.disabled = true;
+                    const originalHtml = addGroupBtn.innerHTML;
+                    addGroupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+
+                    try {
+                        const response = await window.apiClient.post('/providers', {
+                            providerType: newProviderType,
+                            providerConfig: {
+                                customName: cleanSuffix.toUpperCase(),
+                                isHealthy: true,
+                                isDisabled: false,
+                                usageCount: 0,
+                                errorCount: 0
+                            }
+                        });
+
+                        if (response.success) {
+                            showToast(t('common.success'), t('providers.addGroup.success'), 'success');
+                            await loadProviders(true);
+                            setTimeout(() => openProviderManager(newProviderType), 500);
+                        } else {
+                            throw new Error(response.error?.message || 'Unknown error');
+                        }
+                    } catch (error) {
+                        console.error('Failed to add provider group:', error);
+                        showToast(t('common.error'), t('providers.addGroup.error') + ': ' + error.message, 'error');
+                        addGroupBtn.disabled = false;
+                        addGroupBtn.innerHTML = originalHtml;
+                    }
+                }
+            );
+            return;
+        }
+
+        const authBtn = event.target.closest('.generate-auth-btn');
+        if (authBtn) {
+            event.preventDefault();
+            event.stopPropagation();
+
+            const providerItem = authBtn.closest('.provider-item');
+            const providerType = providerItem?.dataset.providerType;
+            if (providerType) {
+                await handleGenerateAuthUrl(providerType);
+            }
+            return;
+        }
+
+        const providerItem = event.target.closest('.provider-item');
+        if (providerItem && container.contains(providerItem)) {
+            event.preventDefault();
+            openProviderManager(providerItem.dataset.providerType);
+        }
+    });
 }
 
 /**
@@ -279,6 +363,9 @@ function renderProviders(providers, supportedProviders = []) {
     const dashboardActive = isSectionActive('dashboard');
     const providersActive = isSectionActive('providers');
     if (!container && !dashboardActive) return;
+    if (container) {
+        bindProviderListInteractions(container);
+    }
 
     // 检查是否有提供商池数据
     const hasProviders = Object.keys(providers).length > 0;
@@ -444,76 +531,7 @@ function renderProviders(providers, supportedProviders = []) {
                 providerDiv.classList.add('empty-provider');
             }
 
-            // 添加点击事件 - 整个提供商组都可以点击
-            providerDiv.addEventListener('click', (e) => {
-                e.preventDefault();
-                openProviderManager(providerType);
-            });
-
             container.appendChild(providerDiv);
-            
-            // 为添加分组按钮添加事件监听
-            const addGroupBtn = providerDiv.querySelector('.add-group-btn');
-            if (addGroupBtn) {
-                addGroupBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    
-                    // 使用自定义的主题风格 Prompt
-                    showSimplePrompt(
-                    t('providers.addGroup.title'),
-                    t('providers.addGroup.suffixPlaceholder'),
-                    async (suffix) => {
-                        const cleanSuffix = suffix.toLowerCase().replace(/[^a-z0-9]/g, '');
-                        if (!cleanSuffix) {
-                            showToast(t('common.warning'), t('common.invalidSuffix'), 'warning');
-                            return;
-                        }
-                        
-                        const newProviderType = `${providerType}-${cleanSuffix}`;
-                        
-                        // 显示加载状态
-                        addGroupBtn.disabled = true;
-                        const originalHtml = addGroupBtn.innerHTML;
-                        addGroupBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-                        
-                        try {
-                            const response = await window.apiClient.post('/providers', {
-                                providerType: newProviderType,
-                                providerConfig: {
-                                    customName: cleanSuffix.toUpperCase(),
-                                    isHealthy: true,
-                                    isDisabled: false,
-                                    usageCount: 0,
-                                    errorCount: 0
-                                }
-                            });
-                            
-                            if (response.success) {
-                                showToast(t('common.success'), t('providers.addGroup.success'), 'success');
-                                await loadProviders(true);
-                                setTimeout(() => openProviderManager(newProviderType), 500);
-                            } else {
-                                throw new Error(response.error?.message || 'Unknown error');
-                            }
-                        } catch (error) {
-                            console.error('Failed to add provider group:', error);
-                            showToast(t('common.error'), t('providers.addGroup.error') + ': ' + error.message, 'error');
-                            addGroupBtn.disabled = false;
-                            addGroupBtn.innerHTML = originalHtml;
-                        }
-                    }
-                    );
-                });
-            }
-
-            // 为授权按钮添加事件监听
-            const authBtn = providerDiv.querySelector('.generate-auth-btn');
-            if (authBtn) {
-                authBtn.addEventListener('click', (e) => {
-                    e.stopPropagation(); // 阻止事件冒泡到父元素
-                    handleGenerateAuthUrl(providerType);
-                });
-            }
         });
         lastProvidersListRenderKey = providerListRenderKey;
     }
