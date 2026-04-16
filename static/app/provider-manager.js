@@ -656,7 +656,13 @@ function updateProviderStatsDisplay(activeProviders, healthyProviders, totalAcco
  */
 async function openProviderManager(providerType, searchTerm = '') {
     try {
-        const data = await window.apiClient.get(`/providers/${encodeURIComponent(providerType)}`);
+        const params = new URLSearchParams();
+        params.set('page', '1');
+        params.set('pageSize', '5');
+        if (searchTerm.trim()) {
+            params.set('search', searchTerm.trim());
+        }
+        const data = await window.apiClient.get(`/providers/${encodeURIComponent(providerType)}?${params.toString()}`);
         
         showProviderManagerModal(data, searchTerm);
     } catch (error) {

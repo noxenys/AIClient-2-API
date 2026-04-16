@@ -120,6 +120,37 @@ function getManagedSupportedModels(providerType, providers = []) {
     );
 }
 
+function parsePositiveInteger(value, fallback, { min = 1, max = 200 } = {}) {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+
+    return Math.min(Math.max(parsed, min), max);
+}
+
+function matchesProviderSearch(provider, searchTerm = '') {
+    if (!searchTerm) {
+        return true;
+    }
+
+    const normalizedTerm = searchTerm.toLowerCase();
+    return Object.values(provider || {}).some(value => {
+        if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            return String(value).toLowerCase().includes(normalizedTerm);
+        }
+
+        if (Array.isArray(value)) {
+            return value.some(item =>
+                (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') &&
+                String(item).toLowerCase().includes(normalizedTerm)
+            );
+        }
+
+        return false;
+    });
+}
+
 function persistProviderStatusToFile(currentConfig, providerPoolManager) {
     const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
     const providerPools = {};
@@ -315,12 +346,49 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
     }
 
     const providers = providerPools[providerType] || [];
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const search = (url.searchParams.get('search') || '').trim();
+    const pageParam = url.searchParams.get('page');
+    const pageSizeParam = url.searchParams.get('pageSize');
+    const usePaginatedResponse = pageParam !== null || pageSizeParam !== null || search !== '';
+    const healthyCount = providers.filter(p => p.isHealthy).length;
+    const unhealthyCount = providers.length - healthyCount;
+
+    if (!usePaginatedResponse) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            providerType,
+            providers: providers.map(p => sanitizeProviderData(p, true)), // 详情页也进行打码，确保即便点击显示也是脱敏数据
+            totalCount: providers.length,
+            healthyCount
+        }));
+        return true;
+    }
+
+    const filteredProviders = search
+        ? providers.filter(provider => matchesProviderSearch(provider, search))
+        : providers;
+    const pageSize = parsePositiveInteger(pageSizeParam, 20);
+    const totalPages = Math.max(1, Math.ceil(filteredProviders.length / pageSize));
+    const page = parsePositiveInteger(pageParam, 1, { min: 1, max: totalPages });
+    const startIndex = (page - 1) * pageSize;
+    const pagedProviders = filteredProviders.slice(startIndex, startIndex + pageSize).map(provider =>
+        sanitizeProviderData(provider, true)
+    );
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         providerType,
-        providers: providers.map(p => sanitizeProviderData(p, true)), // 详情页也进行打码，确保即便点击显示也是脱敏数据
+        providers: pagedProviders,
+        items: pagedProviders,
         totalCount: providers.length,
-        healthyCount: providers.filter(p => p.isHealthy).length
+        healthyCount,
+        unhealthyCount,
+        filteredCount: filteredProviders.length,
+        page,
+        pageSize,
+        totalPages,
+        search
     }));
     return true;
 }

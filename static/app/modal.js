@@ -18,6 +18,13 @@ let currentPage = 1;
 let currentProviders = [];
 let currentProviderType = '';
 let nodeSearchTerm = '';
+let currentTotalCount = 0;
+let currentHealthyCount = 0;
+let currentUnhealthyCount = 0;
+let currentFilteredCount = 0;
+let currentTotalPages = 1;
+let providerFetchSequence = 0;
+let nodeSearchDebounceTimer = null;
 let currentViewMode = localStorage.getItem('providerViewMode') || 'list';
 
 function usesManagedModelList(providerType = '') {
@@ -50,6 +57,42 @@ function parseModelsData(rawValue = '') {
         console.warn('Failed to parse models data:', error);
         return [];
     }
+}
+
+function buildProviderPageUrl(providerType, page = 1, searchTerm = '') {
+    const params = new URLSearchParams();
+    params.set('page', String(page));
+    params.set('pageSize', String(PROVIDERS_PER_PAGE));
+
+    if (searchTerm.trim()) {
+        params.set('search', searchTerm.trim());
+    }
+
+    return `/providers/${encodeURIComponent(providerType)}?${params.toString()}`;
+}
+
+function applyProviderPageData(data, fallbackSearchTerm = '') {
+    currentProviderType = data.providerType || currentProviderType;
+    currentProviders = Array.isArray(data.providers) ? data.providers : [];
+    currentPage = data.page || 1;
+    currentTotalCount = data.totalCount ?? currentProviders.length;
+    currentHealthyCount = data.healthyCount ?? currentProviders.filter(provider => provider.isHealthy).length;
+    currentUnhealthyCount = data.unhealthyCount ?? Math.max(0, currentTotalCount - currentHealthyCount);
+    currentFilteredCount = data.filteredCount ?? currentProviders.length;
+    currentTotalPages = data.totalPages ?? Math.max(1, Math.ceil(currentFilteredCount / PROVIDERS_PER_PAGE));
+    nodeSearchTerm = typeof data.search === 'string' ? data.search : fallbackSearchTerm;
+}
+
+async function fetchProviderPage(providerType, page = 1, searchTerm = nodeSearchTerm) {
+    const requestSeq = ++providerFetchSequence;
+    const data = await window.apiClient.get(buildProviderPageUrl(providerType, page, searchTerm));
+
+    if (requestSeq !== providerFetchSequence) {
+        return null;
+    }
+
+    applyProviderPageData(data, searchTerm);
+    return data;
 }
 
 function renderSupportedModelsValue(models = []) {
@@ -392,13 +435,10 @@ async function openSupportedModelsPicker(providerType, uuid, event) {
  * @param {string} initialSearchTerm - 初始搜索词
  */
 function showProviderManagerModal(data, initialSearchTerm = '') {
-    const { providerType, providers, totalCount, healthyCount } = data;
+    const { providerType } = data;
     
     // 保存当前数据用于分页
-    currentProviders = providers;
-    currentProviderType = providerType;
-    currentPage = 1;
-    nodeSearchTerm = initialSearchTerm;
+    applyProviderPageData(data, initialSearchTerm);
     cachedModels = [];
     
     // 移除已存在的模态框
@@ -410,8 +450,6 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
         }
         existingModal.remove();
     }
-    
-    const totalPages = Math.ceil(providers.length / PROVIDERS_PER_PAGE);
     
     // 创建模态框
     const modal = document.createElement('div');
@@ -429,11 +467,11 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
                 <div class="provider-summary">
                     <div class="provider-summary-item">
                         <span class="label" data-i18n="modal.provider.totalAccounts">总账户数:</span>
-                        <span class="value">${totalCount}</span>
+                        <span class="value">${currentTotalCount}</span>
                     </div>
                     <div class="provider-summary-item">
                         <span class="label" data-i18n="modal.provider.healthyAccounts">健康账户:</span>
-                        <span class="value">${healthyCount}</span>
+                        <span class="value">${currentHealthyCount}</span>
                     </div>
                     <div class="provider-summary-actions">
                         <button class="btn btn-success" onclick="window.showAddProviderForm('${providerType}')">
@@ -486,7 +524,56 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
     addModalEventListeners(modal);
     
     // 初始渲染
-    window.goToProviderPage(1);
+    renderCurrentProviderPage();
+}
+
+function renderCurrentProviderPage() {
+    const modal = document.querySelector('.provider-modal');
+    if (!modal) {
+        return;
+    }
+
+    const summaryValues = modal.querySelectorAll('.provider-summary-item .value');
+    if (summaryValues[0]) {
+        summaryValues[0].textContent = currentTotalCount;
+    }
+    if (summaryValues[1]) {
+        summaryValues[1].textContent = currentHealthyCount;
+    }
+
+    const providerList = modal.querySelector('#providerList');
+    if (providerList) {
+        providerList.innerHTML = renderProviderListPaginated(currentProviders);
+    }
+
+    const paginationTop = modal.querySelector('#paginationTop');
+    const paginationBottom = modal.querySelector('#paginationBottom');
+    const paginationHtml = currentTotalPages > 1
+        ? renderPagination(currentPage, currentTotalPages, currentFilteredCount)
+        : '';
+    const paginationBottomHtml = currentTotalPages > 1
+        ? renderPagination(currentPage, currentTotalPages, currentFilteredCount, 'bottom')
+        : '';
+
+    if (paginationTop) {
+        paginationTop.innerHTML = paginationHtml;
+    }
+    if (paginationBottom) {
+        paginationBottom.innerHTML = paginationBottomHtml;
+    }
+
+    if (usesManagedModelList(currentProviderType)) {
+        return;
+    }
+
+    if (cachedModels.length > 0) {
+        currentProviders.forEach(provider => {
+            renderNotSupportedModelsSelector(provider.uuid, cachedModels, provider.notSupportedModels || []);
+        });
+        return;
+    }
+
+    loadModelsForProviderType(currentProviderType, currentProviders);
 }
 
 /**
@@ -498,7 +585,7 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
  * @returns {string} HTML字符串
  */
 function renderPagination(page, totalPages, totalItems, position = 'top') {
-    if (totalPages <= 1 || currentViewMode === 'card') {
+    if (totalPages <= 1) {
         return `<div class="pagination-container" data-position="${position}"></div>`;
     }
     
@@ -558,97 +645,34 @@ function renderPagination(page, totalPages, totalItems, position = 'top') {
 }
 
 /**
- * 获取过滤后的提供商列表
- */
-function getFilteredProviders() {
-    if (!nodeSearchTerm) return currentProviders;
-    const term = nodeSearchTerm.toLowerCase().trim();
-    return currentProviders.filter(p => {
-        // 搜索字段：自定义名称、UUID、API Key、Base URL、OAuth 路径等
-        const searchFields = [
-            p.customName,
-            p.uuid,
-            p.OPENAI_API_KEY,
-            p.OPENAI_BASE_URL,
-            p.CLAUDE_API_KEY,
-            p.CLAUDE_BASE_URL,
-            p.GEMINI_OAUTH_CREDS_FILE_PATH,
-            p.KIRO_OAUTH_CREDS_FILE_PATH,
-            p.QWEN_OAUTH_CREDS_FILE_PATH,
-            p.ANTIGRAVITY_OAUTH_CREDS_FILE_PATH,
-            p.IFLOW_OAUTH_CREDS_FILE_PATH,
-            p.CODEX_OAUTH_CREDS_FILE_PATH,
-            p.GROK_COOKIE_TOKEN,
-            p.FORWARD_API_KEY,
-            p.checkModelName
-        ];
-        
-        return searchFields.some(field => 
-            field && String(field).toLowerCase().includes(term)
-        );
-    });
-}
-
-/**
  * 跳转到指定页
  * @param {number} page - 目标页码
  */
-function goToProviderPage(page) {
-    const filteredProviders = getFilteredProviders();
-    const totalPages = Math.ceil(filteredProviders.length / PROVIDERS_PER_PAGE);
-    
-    // 验证页码范围
-    if (page < 1) page = 1;
-    if (page > totalPages && totalPages > 0) page = totalPages;
-    if (totalPages === 0) page = 1;
-    
-    currentPage = page;
-    
-    // 更新提供商列表
-    const providerList = document.getElementById('providerList');
-    if (providerList) {
-        providerList.innerHTML = renderProviderListPaginated(filteredProviders, page);
-    }
-    
-    // 更新分页控件
-    const paginationTop = document.getElementById('paginationTop');
-    const paginationBottom = document.getElementById('paginationBottom');
-    
-    if (paginationTop) {
-        paginationTop.innerHTML = totalPages > 1 ? renderPagination(page, totalPages, filteredProviders.length) : '';
-    }
-    if (paginationBottom) {
-        paginationBottom.innerHTML = totalPages > 1 ? renderPagination(page, totalPages, filteredProviders.length, 'bottom') : '';
-    }
-    
-    // 滚动到顶部
-    const modalBody = document.querySelector('.provider-modal-body');
-    if (modalBody) {
-        modalBody.scrollTop = 0;
-    }
-    
-    // 为当前页的提供商加载模型列表
-    const startIndex = (page - 1) * PROVIDERS_PER_PAGE;
-    const endIndex = Math.min(startIndex + PROVIDERS_PER_PAGE, filteredProviders.length);
-    const pageProviders = filteredProviders.slice(startIndex, endIndex);
-    
-    // 如果已缓存模型列表，直接使用
-    if (!usesManagedModelList(currentProviderType) && cachedModels.length > 0) {
-        pageProviders.forEach(provider => {
-            renderNotSupportedModelsSelector(provider.uuid, cachedModels, provider.notSupportedModels || []);
-        });
-    } else if (!usesManagedModelList(currentProviderType)) {
-        loadModelsForProviderType(currentProviderType, pageProviders);
+async function goToProviderPage(page) {
+    try {
+        const data = await fetchProviderPage(currentProviderType, page, nodeSearchTerm);
+        if (!data) {
+            return;
+        }
+
+        renderCurrentProviderPage();
+
+        const modalBody = document.querySelector('.provider-modal-body');
+        if (modalBody) {
+            modalBody.scrollTop = 0;
+        }
+    } catch (error) {
+        console.error('Failed to load provider page:', error);
+        showToast(t('common.error'), t('modal.provider.load.failed'), 'error');
     }
 }
 
 /**
  * 渲染分页后的提供商列表
  * @param {Array} providers - 提供商数组
- * @param {number} page - 当前页码
  * @returns {string} HTML字符串
  */
-function renderProviderListPaginated(providers, page) {
+function renderProviderListPaginated(providers) {
     if (providers.length === 0) {
         return `
             <div class="no-providers">
@@ -658,16 +682,7 @@ function renderProviderListPaginated(providers, page) {
         `;
     }
 
-    // 如果是卡片模式，显示所有节点，不分页
-    if (currentViewMode === 'card') {
-        return renderProviderList(providers);
-    }
-
-    const startIndex = (page - 1) * PROVIDERS_PER_PAGE;
-    const endIndex = Math.min(startIndex + PROVIDERS_PER_PAGE, providers.length);
-    const pageProviders = providers.slice(startIndex, endIndex);
-    
-    return renderProviderList(pageProviders);
+    return renderProviderList(providers);
 }
 
 /**
@@ -780,7 +795,12 @@ function addModalEventListeners(modal) {
     if (searchInput) {
         searchInput.addEventListener('input', (e) => {
             nodeSearchTerm = e.target.value;
-            window.goToProviderPage(1); // 搜索时重置回第一页
+            if (nodeSearchDebounceTimer) {
+                clearTimeout(nodeSearchDebounceTimer);
+            }
+            nodeSearchDebounceTimer = setTimeout(() => {
+                window.goToProviderPage(1);
+            }, 250);
         });
     }
 
@@ -802,8 +822,7 @@ function addModalEventListeners(modal) {
                 b.style.color = isActive ? '#fff' : 'var(--text-secondary)';
             });
 
-            // 重新渲染当前页
-            window.goToProviderPage(currentPage);
+            renderCurrentProviderPage();
         });
     });
     
@@ -1534,67 +1553,12 @@ async function deleteProvider(uuid, event) {
  */
 async function refreshProviderConfig(providerType) {
     try {
-        // 重新获取该提供商类型的最新数据
-        const data = await window.apiClient.get(`/providers/${encodeURIComponent(providerType)}`);
+        const data = await fetchProviderPage(providerType, currentPage, nodeSearchTerm);
         
         // 如果当前显示的是该提供商类型的模态框，则更新模态框
         const modal = document.querySelector('.provider-modal');
-        if (modal && modal.getAttribute('data-provider-type') === providerType) {
-            // 更新缓存的提供商数据
-            currentProviders = data.providers;
-            currentProviderType = providerType;
-            
-            // 更新统计信息
-            const totalCountElement = modal.querySelector('.provider-summary-item .value');
-            if (totalCountElement) {
-                totalCountElement.textContent = data.totalCount;
-            }
-            
-            const healthyCountElement = modal.querySelectorAll('.provider-summary-item .value')[1];
-            if (healthyCountElement) {
-                healthyCountElement.textContent = data.healthyCount;
-            }
-            
-            const totalPages = Math.ceil(data.providers.length / PROVIDERS_PER_PAGE);
-            
-            // 确保当前页不超过总页数
-            if (currentPage > totalPages) {
-                currentPage = Math.max(1, totalPages);
-            }
-            
-            // 重新渲染提供商列表（分页）
-            const providerList = modal.querySelector('.provider-list');
-            if (providerList) {
-                providerList.innerHTML = renderProviderListPaginated(data.providers, currentPage);
-            }
-            
-            // 更新分页控件
-            const paginationContainers = modal.querySelectorAll('.pagination-container');
-            if (totalPages > 1) {
-                paginationContainers.forEach(container => {
-                    const position = container.getAttribute('data-position');
-                    container.outerHTML = renderPagination(currentPage, totalPages, data.providers.length, position);
-                });
-                
-                // 如果之前没有分页控件，需要添加
-                if (paginationContainers.length === 0) {
-                    const modalBody = modal.querySelector('.provider-modal-body');
-                    const providerListEl = modal.querySelector('.provider-list');
-                    if (modalBody && providerListEl) {
-                        providerListEl.insertAdjacentHTML('beforebegin', renderPagination(currentPage, totalPages, data.providers.length, 'top'));
-                        providerListEl.insertAdjacentHTML('afterend', renderPagination(currentPage, totalPages, data.providers.length, 'bottom'));
-                    }
-                }
-            } else {
-                // 如果只有一页，移除分页控件
-                paginationContainers.forEach(container => container.remove());
-            }
-            
-            // 重新加载当前页的模型列表
-            const startIndex = (currentPage - 1) * PROVIDERS_PER_PAGE;
-            const endIndex = Math.min(startIndex + PROVIDERS_PER_PAGE, data.providers.length);
-            const pageProviders = data.providers.slice(startIndex, endIndex);
-            loadModelsForProviderType(providerType, pageProviders);
+        if (data && modal && modal.getAttribute('data-provider-type') === providerType) {
+            renderCurrentProviderPage();
         }
         
         // 同时更新主界面的提供商统计数据
@@ -2108,7 +2072,7 @@ async function refreshProviderUuid(uuid, event) {
  */
 async function deleteUnhealthyProviders(providerType) {
     // 先获取不健康节点数量
-    const unhealthyCount = currentProviders.filter(p => !p.isHealthy).length;
+    const unhealthyCount = currentUnhealthyCount;
     
     if (unhealthyCount === 0) {
         showToast(t('common.info'), t('modal.provider.deleteUnhealthy.noUnhealthy'), 'info');
@@ -2153,7 +2117,7 @@ async function deleteUnhealthyProviders(providerType) {
  */
 async function refreshUnhealthyUuids(providerType) {
     // 先获取不健康节点数量
-    const unhealthyCount = currentProviders.filter(p => !p.isHealthy).length;
+    const unhealthyCount = currentUnhealthyCount;
     
     if (unhealthyCount === 0) {
         showToast(t('common.info'), t('modal.provider.refreshUnhealthyUuids.noUnhealthy'), 'info');
