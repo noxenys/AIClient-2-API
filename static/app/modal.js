@@ -486,8 +486,8 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
                         <button class="btn btn-secondary" onclick="window.refreshUnhealthyUuids('${providerType}')" data-i18n="modal.provider.refreshUnhealthyUuids" title="刷新不健康节点的UUID">
                             <i class="fas fa-sync-alt"></i> <span data-i18n="modal.provider.refreshUnhealthyUuidsBtn">刷新UUID</span>
                         </button>
-                        <button class="btn btn-danger" onclick="window.deleteUnhealthyProviders('${providerType}')" data-i18n="modal.provider.deleteUnhealthy" title="删除不健康节点">
-                            <i class="fas fa-trash-alt"></i> <span data-i18n="modal.provider.deleteUnhealthyBtn">删除不健康</span>
+                        <button class="btn btn-danger" onclick="window.deleteUnhealthyProviders('${providerType}')" data-i18n="modal.provider.deleteUnhealthy" title="删除失效节点（仅 401/403，保留 429）">
+                            <i class="fas fa-trash-alt"></i> <span data-i18n="modal.provider.deleteUnhealthyBtn">删除失效</span>
                         </button>
                     </div>
                 </div>
@@ -2067,7 +2067,7 @@ async function refreshProviderUuid(uuid, event) {
 }
 
 /**
- * 删除所有不健康的提供商节点
+ * 删除所有明确失效的提供商节点（仅 401/403，保留 429）
  * @param {string} providerType - 提供商类型
  */
 async function deleteUnhealthyProviders(providerType) {
@@ -2091,10 +2091,19 @@ async function deleteUnhealthyProviders(providerType) {
         );
         
         if (response.success) {
+            const toastMessage = response.deletedCount > 0
+                ? t('modal.provider.deleteUnhealthy.success', {
+                    count: response.deletedCount,
+                    skipped: response.skippedCount || 0
+                })
+                : t('modal.provider.deleteUnhealthy.noInvalid', {
+                    skipped: response.skippedCount || 0
+                });
+
             showToast(
-                t('common.success'),
-                t('modal.provider.deleteUnhealthy.success', { count: response.deletedCount }),
-                'success'
+                response.deletedCount > 0 ? t('common.success') : t('common.info'),
+                toastMessage,
+                response.deletedCount > 0 ? 'success' : 'info'
             );
             
             // 重新加载配置

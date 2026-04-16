@@ -12,6 +12,7 @@ import {
     inferSupportedModelsFromProviderConfig
 } from '../providers/provider-detection.js';
 import { generateUUID, createProviderConfig, formatSystemPath, detectProviderFromPath, addToUsedPaths, isPathUsed, pathsEqual } from '../utils/provider-utils.js';
+import { removeProvidersByPredicate, shouldPermanentlyDeleteProvider } from '../utils/provider-cleanup.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, invalidateServiceAdapter } from '../providers/adapter.js';
 
@@ -989,9 +990,18 @@ export async function handleDeleteUnhealthyProviders(req, res, currentConfig, pr
             return true;
         }
 
-        // Filter out unhealthy providers (keep only healthy ones)
         const unhealthyProviders = providers.filter(p => !p.isHealthy);
-        const healthyProviders = providers.filter(p => p.isHealthy);
+        const cleanupResult = removeProvidersByPredicate(
+            providerPools,
+            providerType,
+            provider => !provider.isHealthy && shouldPermanentlyDeleteProvider(provider),
+            { globalConfig: currentConfig }
+        );
+        const deletedProviders = cleanupResult.deletedProviders;
+        const remainingProviders = cleanupResult.remainingProviders;
+        const skippedProviders = unhealthyProviders.filter(provider =>
+            !deletedProviders.some(deletedProvider => deletedProvider.uuid === provider.uuid)
+        );
         
         if (unhealthyProviders.length === 0) {
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1004,16 +1014,23 @@ export async function handleDeleteUnhealthyProviders(req, res, currentConfig, pr
             return true;
         }
 
-        // Update the provider pool with only healthy providers
-        if (healthyProviders.length === 0) {
-            delete providerPools[providerType];
-        } else {
-            providerPools[providerType] = healthyProviders;
+        if (deletedProviders.length === 0) {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                message: 'No permanently invalid providers to delete',
+                deletedCount: 0,
+                skippedCount: skippedProviders.length,
+                remainingCount: providers.length
+            }));
+            return true;
         }
+
+        providerPools = cleanupResult.providerPools;
 
         // Save to file
         writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
-        logger.info(`[UI API] Deleted ${unhealthyProviders.length} unhealthy providers from ${providerType}`);
+        logger.info(`[UI API] Deleted ${deletedProviders.length} permanently invalid providers from ${providerType}`);
 
         // Update provider pool manager if available
         if (providerPoolManager) {
@@ -1021,23 +1038,29 @@ export async function handleDeleteUnhealthyProviders(req, res, currentConfig, pr
             providerPoolManager.initializeProviderStatus();
         }
 
+        deletedProviders.forEach(provider => invalidateServiceAdapter(providerType, provider.uuid));
+
         // 广播更新事件
         broadcastEvent('config_update', {
             action: 'delete_unhealthy',
             filePath: filePath,
             providerType,
-            deletedCount: unhealthyProviders.length,
-            deletedProviders: unhealthyProviders.map(p => sanitizeProviderData({ uuid: p.uuid, customName: p.customName })),
+            deletedCount: deletedProviders.length,
+            skippedCount: skippedProviders.length,
+            deletedProviders: deletedProviders.map(p => sanitizeProviderData({ uuid: p.uuid, customName: p.customName })),
+            deletedCredentialFiles: cleanupResult.deletedCredentialFiles,
             timestamp: new Date().toISOString()
         });
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
             success: true,
-            message: `Successfully deleted ${unhealthyProviders.length} unhealthy providers`,
-            deletedCount: unhealthyProviders.length,
-            remainingCount: healthyProviders.length,
-            deletedProviders: unhealthyProviders.map(p => ({ uuid: p.uuid, customName: p.customName }))
+            message: `Successfully deleted ${deletedProviders.length} permanently invalid providers`,
+            deletedCount: deletedProviders.length,
+            skippedCount: skippedProviders.length,
+            remainingCount: remainingProviders.length,
+            deletedProviders: deletedProviders.map(p => ({ uuid: p.uuid, customName: p.customName })),
+            deletedCredentialFiles: cleanupResult.deletedCredentialFiles
         }));
         return true;
     } catch (error) {

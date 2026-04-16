@@ -11,6 +11,7 @@ import {
 } from './provider-models.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { ENDPOINT_TYPE } from '../utils/common.js';
+import { removeProvidersByPredicate, shouldPermanentlyDeleteProvider } from '../utils/provider-cleanup.js';
 
 function getCustomModelAliasesForProvider(config, providerType) {
     const customModels = Array.isArray(config?.customModels) ? config.customModels : [];
@@ -105,6 +106,7 @@ export class ProviderPoolManager {
         this.refreshBufferTimers = {}; // 按 providerType 分组的定时器
         this.bufferDelay = options.globalConfig?.REFRESH_BUFFER_DELAY ?? 5000; // 默认5秒缓冲延迟
         this.refreshTaskTimeoutMs = options.globalConfig?.REFRESH_TASK_TIMEOUT_MS ?? 60000; // 默认60秒刷新超时
+        this.autoDeletingUuids = new Set();
         
         // 用于并发选点时的原子排序辅助（自增序列）
         this._selectionSequence = 0;
@@ -1604,6 +1606,71 @@ export class ProviderPoolManager {
             this._log('warn', `Immediately marked provider as unhealthy: ${providerConfig.uuid} for type ${providerType}. Reason: ${errorMessage || 'Authentication error'}`);
            
             this._debouncedSave(providerType);
+
+            if (shouldPermanentlyDeleteProvider({ ...provider.config, lastErrorMessage: errorMessage || provider.config.lastErrorMessage })) {
+                void this._autoDeletePermanentlyInvalidProvider(providerType, provider.config.uuid);
+            }
+        }
+    }
+
+    async _autoDeletePermanentlyInvalidProvider(providerType, providerUuid) {
+        const deleteKey = `${providerType}:${providerUuid}`;
+        if (this.autoDeletingUuids.has(deleteKey)) {
+            return;
+        }
+
+        this.autoDeletingUuids.add(deleteKey);
+
+        try {
+            const provider = this.providerPools?.[providerType]?.find(item => item.uuid === providerUuid);
+            if (!provider || !shouldPermanentlyDeleteProvider(provider)) {
+                return;
+            }
+
+            const cleanupResult = removeProvidersByPredicate(
+                this.providerPools,
+                providerType,
+                item => item.uuid === providerUuid && shouldPermanentlyDeleteProvider(item),
+                { globalConfig: this.globalConfig }
+            );
+
+            if (cleanupResult.deletedProviders.length === 0) {
+                return;
+            }
+
+            this.providerPools = cleanupResult.providerPools;
+            this.initializeProviderStatus();
+            this.pendingSaves.delete(providerType);
+            if (this.pendingSaves.size === 0 && this.saveTimer) {
+                clearTimeout(this.saveTimer);
+                this.saveTimer = null;
+            }
+
+            const filePath = this.globalConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
+            await fs.promises.writeFile(filePath, JSON.stringify(this.providerPools, null, 2), 'utf8');
+
+            cleanupResult.deletedProviders.forEach(item => {
+                invalidateServiceAdapter(providerType, item.uuid);
+            });
+
+            broadcastEvent('config_update', {
+                action: 'auto_delete_invalid_provider',
+                filePath,
+                providerType,
+                deletedCount: cleanupResult.deletedProviders.length,
+                deletedProviders: cleanupResult.deletedProviders.map(item => ({
+                    uuid: item.uuid,
+                    customName: item.customName
+                })),
+                deletedCredentialFiles: cleanupResult.deletedCredentialFiles,
+                timestamp: new Date().toISOString()
+            });
+
+            this._log('warn', `Auto deleted ${cleanupResult.deletedProviders.length} permanently invalid provider(s) from ${providerType}`);
+        } catch (error) {
+            this._log('error', `Failed to auto delete invalid provider ${providerUuid} from ${providerType}: ${error.message}`);
+        } finally {
+            this.autoDeletingUuids.delete(deleteKey);
         }
     }
 
