@@ -527,6 +527,33 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
     renderCurrentProviderPage();
 }
 
+function getProviderRuntimeState(provider = {}) {
+    if (provider.state) return provider.state;
+    if (provider.isDisabled) return 'disabled';
+    if (provider.isHealthy) return 'healthy';
+    return 'risky';
+}
+
+function renderProviderRuntimeState(provider = {}) {
+    const state = getProviderRuntimeState(provider);
+    const stateLabel = t(`modal.provider.runtimeState.${state}`) || state;
+    const cooldownText = state === 'cooldown' && provider.cooldownUntil
+        ? ` | <span><i class="fas fa-hourglass-half"></i> ${t('modal.provider.cooldownUntil')}: ${new Date(provider.cooldownUntil).toLocaleString()}</span>`
+        : '';
+    const reasonText = provider.lastStateReason
+        ? ` | <span><i class="fas fa-circle-info"></i> ${t('modal.provider.runtimeReason')}: ${escapeHtml(provider.lastStateReason)}</span>`
+        : '';
+
+    return `
+        <div class="provider-state-meta">
+            <span class="provider-state-badge provider-state-${state}">
+                <i class="fas fa-signal"></i>
+                ${escapeHtml(stateLabel)}
+            </span>${cooldownText}${reasonText}
+        </div>
+    `;
+}
+
 function renderCurrentProviderPage() {
     const modal = document.querySelector('.provider-modal');
     if (!modal) {
@@ -928,6 +955,7 @@ function renderProviderDetailList(providers) {
                                 <span data-i18n="modal.provider.checkModel">检测模型</span>: ${lastHealthCheckModel}
                             </span>
                         </div>
+                        ${renderProviderRuntimeState(provider)}
                         ${errorInfoHtml}
                     </div>
                     <div class="provider-actions-group">

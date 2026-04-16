@@ -75,6 +75,28 @@ function sanitizeProviderPools(pools, maskSensitive = false) {
     return sanitized;
 }
 
+function getProviderStateCounts(providers = []) {
+    const counts = {
+        healthy: 0,
+        cooldown: 0,
+        risky: 0,
+        banned: 0,
+        disabled: 0,
+        unknown: 0
+    };
+
+    providers.forEach(provider => {
+        const state = typeof provider.state === 'string' ? provider.state : 'unknown';
+        if (Object.prototype.hasOwnProperty.call(counts, state)) {
+            counts[state]++;
+        } else {
+            counts.unknown++;
+        }
+    });
+
+    return counts;
+}
+
 /**
  * 过滤掉数据中的脱敏占位符，避免在保存时覆盖真实数据
  */
@@ -347,6 +369,7 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
     }
 
     const providers = providerPools[providerType] || [];
+    const stateCounts = getProviderStateCounts(providers);
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const search = (url.searchParams.get('search') || '').trim();
     const pageParam = url.searchParams.get('page');
@@ -361,7 +384,9 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
             providerType,
             providers: providers.map(p => sanitizeProviderData(p, true)), // 详情页也进行打码，确保即便点击显示也是脱敏数据
             totalCount: providers.length,
-            healthyCount
+            healthyCount,
+            unhealthyCount,
+            stateCounts
         }));
         return true;
     }
@@ -385,6 +410,7 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
         totalCount: providers.length,
         healthyCount,
         unhealthyCount,
+        stateCounts,
         filteredCount: filteredProviders.length,
         page,
         pageSize,

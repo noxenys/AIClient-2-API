@@ -12,6 +12,15 @@ import {
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { ENDPOINT_TYPE } from '../utils/common.js';
 import { removeProvidersByPredicate, shouldPermanentlyDeleteProvider } from '../utils/provider-cleanup.js';
+import {
+    PROVIDER_STATES,
+    classifyProviderFailure,
+    getCooldownUntil,
+    getProviderStateScore,
+    inferProviderStateFromConfig,
+    isProviderStateSelectable,
+    normalizeProviderState
+} from '../utils/provider-state.js';
 
 function getCustomModelAliasesForProvider(config, providerType) {
     const customModels = Array.isArray(config?.customModels) ? config.customModels : [];
@@ -107,6 +116,7 @@ export class ProviderPoolManager {
         this.bufferDelay = options.globalConfig?.REFRESH_BUFFER_DELAY ?? 5000; // 默认5秒缓冲延迟
         this.refreshTaskTimeoutMs = options.globalConfig?.REFRESH_TASK_TIMEOUT_MS ?? 60000; // 默认60秒刷新超时
         this.autoDeletingUuids = new Set();
+        this.rateLimitCooldownMs = options.globalConfig?.RATE_LIMIT_COOLDOWN_MS ?? 15 * 60 * 1000;
         
         // 用于并发选点时的原子排序辅助（自增序列）
         this._selectionSequence = 0;
@@ -540,9 +550,16 @@ export class ProviderPoolManager {
     _calculateNodeScore(providerStatus, now = Date.now(), minSeqInPool = -1) {
         const config = providerStatus.config;
         const state = providerStatus.state;
+        const runtimeState = normalizeProviderState(config.state, inferProviderStateFromConfig(config, now));
         
-        // 1. 基础健康分：不健康的排最后
-        if (!config.isHealthy || config.isDisabled) return 1e18;
+        if (runtimeState === PROVIDER_STATES.DISABLED || config.isDisabled) return 1e18;
+        if (runtimeState === PROVIDER_STATES.BANNED) return 1e17;
+        if (runtimeState === PROVIDER_STATES.COOLDOWN) {
+            const cooldownUntil = new Date(config.cooldownUntil || 0).getTime();
+            const remainingMs = Number.isFinite(cooldownUntil) ? Math.max(0, cooldownUntil - now) : this.rateLimitCooldownMs;
+            return 1e16 + remainingMs;
+        }
+        if (!isProviderStateSelectable(runtimeState)) return 1e18;
         
         // 检查并发限制
         const concurrencyLimit = parseInt(config.concurrencyLimit || 0);
@@ -588,14 +605,16 @@ export class ProviderPoolManager {
         // 新鲜节点的微调：配合 usageScore 和 sequenceScore 在多个新鲜节点间轮询
         const freshBonus = isFresh ? (now - lastHealthCheckTime) : 0;
 
-        return baseScore + usageScore + sequenceScore + loadScore + freshBonus;
+        const riskyPenalty = runtimeState === PROVIDER_STATES.RISKY ? 1e12 : 0;
+
+        return baseScore + usageScore + sequenceScore + loadScore + freshBonus + riskyPenalty;
     }
 
     /**
      * 获取指定类型的健康节点数量
      */
     getHealthyCount(providerType) {
-        return (this.providerStatus[providerType] || []).filter(p => p.config.isHealthy && !p.config.isDisabled).length;
+        return (this.providerStatus[providerType] || []).filter(p => p.config.state === PROVIDER_STATES.HEALTHY).length;
     }
 
     /**
@@ -706,6 +725,60 @@ export class ProviderPoolManager {
         return pool?.find(p => p.uuid === uuid) || null;
     }
 
+    _syncLegacyStatusFields(config) {
+        const state = normalizeProviderState(config.state);
+
+        config.state = state;
+        config.stateScore = getProviderStateScore(state, config);
+        config.isDisabled = state === PROVIDER_STATES.DISABLED;
+        config.isHealthy = state === PROVIDER_STATES.HEALTHY;
+
+        if (state !== PROVIDER_STATES.COOLDOWN) {
+            config.cooldownUntil = null;
+        }
+    }
+
+    _transitionProviderState(providerType, providerStatus, nextState, reason = null, options = {}) {
+        if (!providerStatus?.config) {
+            return;
+        }
+
+        const config = providerStatus.config;
+        const previousState = normalizeProviderState(config.state, inferProviderStateFromConfig(config));
+        const normalizedNextState = normalizeProviderState(nextState, PROVIDER_STATES.HEALTHY);
+        const nowIso = new Date().toISOString();
+
+        config.state = normalizedNextState;
+        config.lastStateChangeAt = nowIso;
+        config.lastStateReason = reason || null;
+
+        if (normalizedNextState === PROVIDER_STATES.HEALTHY) {
+            config.consecutiveFailures = 0;
+            config.recentFailureType = null;
+            config.cooldownUntil = null;
+        } else {
+            const failureType = options.failureType || classifyProviderFailure(reason || '') || config.recentFailureType || 'unknown';
+            config.recentFailureType = failureType;
+            config.consecutiveFailures = options.resetFailures
+                ? 0
+                : ((config.consecutiveFailures || 0) + (options.incrementFailures === false ? 0 : 1));
+
+            if (normalizedNextState === PROVIDER_STATES.COOLDOWN) {
+                config.cooldownUntil = options.cooldownUntil || getCooldownUntil(Date.now(), this.rateLimitCooldownMs);
+            } else {
+                config.cooldownUntil = null;
+            }
+        }
+
+        this._syncLegacyStatusFields(config);
+
+        const previousHealthStatus = previousState === PROVIDER_STATES.HEALTHY ? 'healthy' : 'unhealthy';
+        const nextHealthStatus = normalizedNextState === PROVIDER_STATES.HEALTHY ? 'healthy' : 'unhealthy';
+        if (previousHealthStatus !== nextHealthStatus) {
+            this._logHealthStatusChange(providerType, config, previousHealthStatus, nextHealthStatus, reason);
+        }
+    }
+
     /**
      * 根据 UUID 在所有池中查找提供商配置
      * @param {string} uuid - 提供商 UUID
@@ -749,25 +822,31 @@ export class ProviderPoolManager {
                     providerConfig.isDisabled = providerConfig.isDisabled !== undefined ? providerConfig.isDisabled : false;
                     
                     // --- V3: 统计数据管理 ---
-                    if (isColdStart) {
-                        // 冷启动：清空所有统计数据
-                        providerConfig.lastUsed = null;
-                        providerConfig.usageCount = 0;
-                        providerConfig.errorCount = 0;
-                        providerConfig.lastErrorTime = null;
-                        providerConfig.lastErrorMessage = null;
-                    } else if (existing) {
+                    if (existing) {
                         // 热重载：从旧状态中恢复统计数据，避免被配置文件中的旧数据覆盖
                         providerConfig.lastUsed = existing.config.lastUsed;
                         providerConfig.usageCount = existing.config.usageCount;
                         providerConfig.errorCount = existing.config.errorCount;
                         providerConfig.lastErrorTime = existing.config.lastErrorTime;
                         providerConfig.lastErrorMessage = existing.config.lastErrorMessage;
+                        providerConfig.state = existing.config.state;
+                        providerConfig.stateScore = existing.config.stateScore;
+                        providerConfig.cooldownUntil = existing.config.cooldownUntil;
+                        providerConfig.lastStateChangeAt = existing.config.lastStateChangeAt;
+                        providerConfig.lastStateReason = existing.config.lastStateReason;
+                        providerConfig.consecutiveFailures = existing.config.consecutiveFailures;
+                        providerConfig.recentFailureType = existing.config.recentFailureType;
                     } else {
-                        // 新增节点或默认初始化
                         providerConfig.lastUsed = providerConfig.lastUsed || null;
                         providerConfig.usageCount = providerConfig.usageCount || 0;
                         providerConfig.errorCount = providerConfig.errorCount || 0;
+                        providerConfig.lastErrorTime = providerConfig.lastErrorTime || null;
+                        providerConfig.lastErrorMessage = providerConfig.lastErrorMessage || null;
+                        providerConfig.cooldownUntil = providerConfig.cooldownUntil || null;
+                        providerConfig.lastStateChangeAt = providerConfig.lastStateChangeAt || null;
+                        providerConfig.lastStateReason = providerConfig.lastStateReason || null;
+                        providerConfig.consecutiveFailures = providerConfig.consecutiveFailures || 0;
+                        providerConfig.recentFailureType = providerConfig.recentFailureType || null;
                     }
                     
                     // --- V2: 刷新监控字段 ---
@@ -789,6 +868,15 @@ export class ProviderPoolManager {
                     providerConfig.lastHealthCheckModel = providerConfig.lastHealthCheckModel || null;
                     providerConfig.lastErrorMessage = providerConfig.lastErrorMessage || null;
                     providerConfig.customName = providerConfig.customName || null;
+                    providerConfig.state = inferProviderStateFromConfig(providerConfig);
+                    providerConfig.stateScore = getProviderStateScore(providerConfig.state, providerConfig);
+                    providerConfig.lastStateChangeAt = providerConfig.lastStateChangeAt || new Date().toISOString();
+                    providerConfig.lastStateReason = providerConfig.lastStateReason || providerConfig.lastErrorMessage || null;
+                    providerConfig.recentFailureType = providerConfig.recentFailureType || classifyProviderFailure(providerConfig.lastErrorMessage || '');
+                    if (providerConfig.state === PROVIDER_STATES.COOLDOWN && !providerConfig.cooldownUntil) {
+                        providerConfig.cooldownUntil = getCooldownUntil(Date.now(), this.rateLimitCooldownMs);
+                    }
+                    this._syncLegacyStatusFields(providerConfig);
 
                     this.providerStatus[providerType].push({
                         config: providerConfig,
@@ -961,7 +1049,7 @@ export class ProviderPoolManager {
         const minSeq = Math.min(...availableProviders.map(p => p.config._lastSelectionSeq || 0));
 
         let availableAndHealthyProviders = availableProviders.filter(p =>
-            p.config.isHealthy && !p.config.isDisabled && !p.config.needsRefresh
+            isProviderStateSelectable(p.config.state) && !p.config.isDisabled && !p.config.needsRefresh
         );
 
         // 如果指定了模型，则排除不支持该模型的提供商
@@ -989,7 +1077,7 @@ export class ProviderPoolManager {
         }
 
         if (availableAndHealthyProviders.length === 0) {
-            this._log('warn', `No available and healthy providers for type: ${providerType}`);
+            this._log('warn', `No selectable providers for type: ${providerType}`);
             return null;
         }
 
@@ -1323,7 +1411,7 @@ export class ProviderPoolManager {
         if (providers.length === 0) {
             return true;
         }
-        return providers.every(p => !p.config.isHealthy || p.config.isDisabled);
+        return providers.every(p => !isProviderStateSelectable(p.config.state) || p.config.isDisabled);
     }
 
     /**
@@ -1531,10 +1619,10 @@ export class ProviderPoolManager {
 
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
-            const wasHealthy = provider.config.isHealthy;
             const now = Date.now();
             const lastErrorTime = provider.config.lastErrorTime ? new Date(provider.config.lastErrorTime).getTime() : 0;
             const errorWindowMs = 10000; // 10 秒窗口期
+            const failureType = classifyProviderFailure(errorMessage || '') || 'unknown';
 
             // 如果距离上次错误超过窗口期，重置错误计数
             if (now - lastErrorTime > errorWindowMs) {
@@ -1556,16 +1644,25 @@ export class ProviderPoolManager {
                 provider.config.lastErrorMessage = errorMessage;
             }
 
-            if (this.maxErrorCount > 0 && provider.config.errorCount >= this.maxErrorCount) {
-                provider.config.isHealthy = false;
-                
-                // 健康状态变化日志
-                if (wasHealthy) {
-                    this._logHealthStatusChange(providerType, provider.config, 'healthy', 'unhealthy', errorMessage);
-                }
-                
-                this._log('warn', `Marked provider as unhealthy: ${providerConfig.uuid} for type ${providerType}. Total errors: ${provider.config.errorCount}`);
-            } 
+            if (failureType === 'auth') {
+                this.markProviderUnhealthyImmediately(providerType, providerConfig, errorMessage);
+                return;
+            }
+
+            if (failureType === 'rate_limit') {
+                this._transitionProviderState(providerType, provider, PROVIDER_STATES.COOLDOWN, errorMessage, {
+                    failureType,
+                    cooldownUntil: getCooldownUntil(now, this.rateLimitCooldownMs)
+                });
+                this._log('warn', `Moved provider to cooldown: ${providerConfig.uuid} for type ${providerType}. Reason: ${errorMessage}`);
+                this._debouncedSave(providerType);
+                return;
+            }
+
+            this._transitionProviderState(providerType, provider, PROVIDER_STATES.RISKY, errorMessage, {
+                failureType
+            });
+            this._log('warn', `Marked provider as risky: ${providerConfig.uuid} for type ${providerType}. Total errors: ${provider.config.errorCount}`);
 
             this._debouncedSave(providerType);
         }
@@ -1586,8 +1683,6 @@ export class ProviderPoolManager {
 
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
-            const wasHealthy = provider.config.isHealthy;
-            provider.config.isHealthy = false;
             provider.config.needsRefresh = false; // 报错时不健康，清除刷新标记，防止卡死
             provider.config.refreshCount = 0;
             provider.config.errorCount = this.maxErrorCount; // Set to max to indicate definitive failure
@@ -1598,10 +1693,10 @@ export class ProviderPoolManager {
                 provider.config.lastErrorMessage = errorMessage;
             }
 
-            // 健康状态变化日志
-            if (wasHealthy) {
-                this._logHealthStatusChange(providerType, provider.config, 'healthy', 'unhealthy', errorMessage);
-            }
+            this._transitionProviderState(providerType, provider, PROVIDER_STATES.BANNED, errorMessage, {
+                failureType: 'auth',
+                incrementFailures: false
+            });
 
             this._log('warn', `Immediately marked provider as unhealthy: ${providerConfig.uuid} for type ${providerType}. Reason: ${errorMessage || 'Authentication error'}`);
            
@@ -1690,7 +1785,6 @@ export class ProviderPoolManager {
 
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
-            provider.config.isHealthy = false;
             provider.config.needsRefresh = false; // 报错时不健康，清除刷新标记，防止卡死
             provider.config.refreshCount = 0;
             provider.config.errorCount = this.maxErrorCount; // Set to max to indicate definitive failure
@@ -1705,8 +1799,17 @@ export class ProviderPoolManager {
             if (recoveryTime) {
                 const recoveryDate = recoveryTime instanceof Date ? recoveryTime : new Date(recoveryTime);
                 provider.config.scheduledRecoveryTime = recoveryDate.toISOString();
+                this._transitionProviderState(providerType, provider, PROVIDER_STATES.COOLDOWN, errorMessage, {
+                    failureType: 'rate_limit',
+                    cooldownUntil: recoveryDate.toISOString(),
+                    incrementFailures: false
+                });
                 this._log('warn', `Marked provider as unhealthy with recovery time: ${providerConfig.uuid} for type ${providerType}. Recovery at: ${recoveryDate.toISOString()}. Reason: ${errorMessage || 'Quota exhausted'}`);
             } else {
+                this._transitionProviderState(providerType, provider, PROVIDER_STATES.RISKY, errorMessage, {
+                    failureType: classifyProviderFailure(errorMessage || '') || 'unknown',
+                    incrementFailures: false
+                });
                 this._log('warn', `Marked provider as unhealthy: ${providerConfig.uuid} for type ${providerType}. Reason: ${errorMessage || 'Quota exhausted'}`);
             }
 
@@ -1729,8 +1832,6 @@ export class ProviderPoolManager {
 
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
-            const wasHealthy = provider.config.isHealthy;
-            provider.config.isHealthy = true;
             provider.config.errorCount = 0;
             provider.config.refreshCount = 0;
             provider.config.needsRefresh = false;
@@ -1738,6 +1839,7 @@ export class ProviderPoolManager {
             provider.config.lastErrorTime = null;
             provider.config.lastErrorMessage = null;
             provider.config._lastSelectionSeq = 0;
+            provider.config.scheduledRecoveryTime = null;
             
             // 更新健康检测信息
             if (healthCheckModel) {
@@ -1752,11 +1854,10 @@ export class ProviderPoolManager {
                 provider.config.usageCount++;
                 provider.config.lastUsed = new Date().toISOString();
             }
-            
-            // 健康状态变化日志
-            if (!wasHealthy) {
-                this._logHealthStatusChange(providerType, provider.config, 'unhealthy', 'healthy', null);
-            }
+
+            this._transitionProviderState(providerType, provider, PROVIDER_STATES.HEALTHY, null, {
+                resetFailures: true
+            });
             
             this._log('info', `Marked provider as healthy: ${provider.config.uuid} for type ${providerType}${resetUsageCount ? ' (usage count reset)' : ''}`);
             
@@ -1783,7 +1884,9 @@ export class ProviderPoolManager {
             provider.config.lastRefreshTime = Date.now(); // 显式重置时也更新刷新时间
             // 更新为可用
             provider.config.lastHealthCheckTime = new Date().toISOString();
-            // 标记为健康，以便立即投入使用
+            this._transitionProviderState(providerType, provider, PROVIDER_STATES.HEALTHY, 'Refresh status reset', {
+                resetFailures: true
+            });
             this._log('info', `Reset refresh status and marked healthy for provider ${uuid} (${providerType})`);
 
             this._debouncedSave(providerType);
@@ -1825,7 +1928,9 @@ export class ProviderPoolManager {
 
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
-            provider.config.isDisabled = true;
+            this._transitionProviderState(providerType, provider, PROVIDER_STATES.DISABLED, 'Disabled by user', {
+                incrementFailures: false
+            });
             this._log('info', `Disabled provider: ${providerConfig.uuid} for type ${providerType}`);
             this._debouncedSave(providerType);
         }
@@ -1845,6 +1950,14 @@ export class ProviderPoolManager {
         const provider = this._findProvider(providerType, providerConfig.uuid);
         if (provider) {
             provider.config.isDisabled = false;
+            const inferredState = inferProviderStateFromConfig({
+                ...provider.config,
+                isDisabled: false,
+                state: provider.config.state === PROVIDER_STATES.DISABLED ? null : provider.config.state
+            });
+            this._transitionProviderState(providerType, provider, inferredState, 'Enabled by user', {
+                incrementFailures: false
+            });
             this._log('info', `Enabled provider: ${providerConfig.uuid} for type ${providerType}`);
             this._debouncedSave(providerType);
         }
@@ -1911,6 +2024,15 @@ export class ProviderPoolManager {
             const providers = this.providerStatus[type] || [];
             for (const providerStatus of providers) {
                 const config = providerStatus.config;
+
+                if (config.cooldownUntil && config.state === PROVIDER_STATES.COOLDOWN) {
+                    const cooldownUntil = new Date(config.cooldownUntil);
+                    if (now >= cooldownUntil) {
+                        this._log('info', `Auto-recovering cooldown provider ${config.uuid} (${type}). Cooldown elapsed: ${cooldownUntil.toISOString()}`);
+                        this.markProviderHealthy(type, config, true, config.lastHealthCheckModel || null);
+                        continue;
+                    }
+                }
                 
                 // 检查是否有 scheduledRecoveryTime 且已到恢复时间
                 if (config.scheduledRecoveryTime && !config.isHealthy) {
@@ -1919,14 +2041,8 @@ export class ProviderPoolManager {
                         this._log('info', `Auto-recovering provider ${config.uuid} (${type}). Scheduled recovery time reached: ${recoveryTime.toISOString()}`);
                         
                         // 恢复健康状态
-                        config.isHealthy = true;
-                        config.errorCount = 0;
-                        config.lastErrorTime = null;
-                        config.lastErrorMessage = null;
                         config.scheduledRecoveryTime = null; // 清除恢复时间
-                        
-                        // 保存更改
-                        this._debouncedSave(type);
+                        this.markProviderHealthy(type, config, true, config.lastHealthCheckModel || null);
                     }
                 }
             }

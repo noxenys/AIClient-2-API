@@ -14,10 +14,21 @@ jest.mock('../src/ui-modules/event-broadcast.js', () => ({
 }));
 
 let ProviderPoolManager;
+const activeManagers = [];
 
 describe('ProviderPoolManager auto cleanup', () => {
     beforeAll(async () => {
         ({ ProviderPoolManager } = await import('../src/providers/provider-pool-manager.js'));
+    });
+
+    afterEach(() => {
+        for (const manager of activeManagers.splice(0)) {
+            if (manager.saveTimer) {
+                clearTimeout(manager.saveTimer);
+                manager.saveTimer = null;
+            }
+            manager.pendingSaves?.clear();
+        }
     });
 
     test('auto deletes permanently invalid oauth provider after immediate auth failure', async () => {
@@ -47,6 +58,7 @@ describe('ProviderPoolManager auto cleanup', () => {
             globalConfig: { PROVIDER_POOLS_FILE_PATH: poolsFile },
             saveDebounceTime: 1
         });
+        activeManagers.push(manager);
 
         manager.markProviderUnhealthyImmediately(
             'openai-codex-oauth',
@@ -54,9 +66,21 @@ describe('ProviderPoolManager auto cleanup', () => {
             '401 Unauthorized'
         );
 
-        await new Promise(resolve => setTimeout(resolve, 80));
+        let savedPools = null;
+        for (let attempt = 0; attempt < 20; attempt++) {
+            await new Promise(resolve => setTimeout(resolve, 30));
+            try {
+                const raw = fs.readFileSync(poolsFile, 'utf8');
+                savedPools = JSON.parse(raw);
+                if (!savedPools['openai-codex-oauth']) {
+                    break;
+                }
+            } catch {
+                // 文件写入过程中可能暂时不可解析，继续等待
+            }
+        }
 
-        const savedPools = JSON.parse(fs.readFileSync(poolsFile, 'utf8'));
+        expect(savedPools).toBeTruthy();
 
         expect(savedPools['openai-codex-oauth']).toBeUndefined();
         expect(manager.providerPools['openai-codex-oauth']).toBeUndefined();
