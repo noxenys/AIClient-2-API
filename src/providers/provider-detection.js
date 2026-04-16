@@ -97,12 +97,28 @@ const CODEX_PLAN_MODELS = {
     ]
 };
 
+const GROK_MODE_TO_MODEL_MAP = {
+    auto: 'grok-4.20',
+    fast: 'grok-4.20-fast',
+    expert: 'grok-4.20-expert',
+    heavy: 'grok-4.20-heavy'
+};
+
 function resolveFilePath(filePath) {
     if (!filePath || typeof filePath !== 'string') {
         return null;
     }
 
     return path.isAbsolute(filePath) ? filePath : path.join(process.cwd(), filePath);
+}
+
+function looksLikeJsonPath(value = '') {
+    if (typeof value !== 'string') {
+        return false;
+    }
+
+    const trimmed = value.trim();
+    return trimmed.endsWith('.json') || trimmed.includes(path.sep) || trimmed.includes('/');
 }
 
 function parseJwtClaims(token) {
@@ -184,6 +200,103 @@ async function inferCodexModels(providerConfig = {}) {
     return [];
 }
 
+function isModeAvailable(mode = {}) {
+    const availability = mode?.availability;
+    if (!availability || typeof availability !== 'object') {
+        return true;
+    }
+    if (availability.available !== undefined) {
+        return true;
+    }
+
+    return !(availability.unavailable || availability.requiresUpgrade || availability.comingSoon);
+}
+
+function mapGrokModeToModel(mode = {}) {
+    const exact = GROK_MODE_TO_MODEL_MAP[String(mode.id || '').trim().toLowerCase()];
+    if (exact) {
+        return exact;
+    }
+
+    const raw = [
+        mode.id,
+        mode.title,
+        mode.description,
+        mode.badgeText,
+        ...(Array.isArray(mode.tags) ? mode.tags : [])
+    ].filter(Boolean).join(' ').toLowerCase();
+
+    if (raw.includes('4.1') && raw.includes('thinking')) {
+        return 'grok-4.1-thinking';
+    }
+    if (raw.includes('4.1') && raw.includes('mini')) {
+        return 'grok-4.1-mini';
+    }
+    if (raw.includes('heavy')) {
+        return 'grok-4.20-heavy';
+    }
+    if (raw.includes('expert')) {
+        return 'grok-4.20-expert';
+    }
+    if (raw.includes('fast')) {
+        return 'grok-4.20-fast';
+    }
+    if (raw.includes('auto') || raw.includes('default')) {
+        return 'grok-4.20';
+    }
+
+    return null;
+}
+
+export function extractGrokModelsFromModesResponse(payload = {}) {
+    const modes = Array.isArray(payload?.modes) ? payload.modes : [];
+    const models = modes
+        .filter(isModeAvailable)
+        .map(mapGrokModeToModel)
+        .filter(Boolean);
+
+    return normalizeModelIds(models);
+}
+
+async function resolveGrokProviderConfig(providerConfig = {}) {
+    const rawToken = providerConfig.GROK_COOKIE_TOKEN;
+    if (rawToken && looksLikeJsonPath(rawToken)) {
+        const fileConfig = await readJsonFile(rawToken);
+        if (fileConfig && typeof fileConfig === 'object') {
+            return {
+                ...providerConfig,
+                ...fileConfig
+            };
+        }
+    }
+
+    return providerConfig;
+}
+
+async function detectGrokModels(providerConfig = {}) {
+    const resolvedConfig = await resolveGrokProviderConfig(providerConfig);
+    if (!resolvedConfig.GROK_COOKIE_TOKEN) {
+        return [];
+    }
+
+    try {
+        const { GrokApiService } = await import('./grok/grok-core.js');
+        const service = new GrokApiService({
+            ...resolvedConfig,
+            MODEL_PROVIDER: 'grok-custom'
+        });
+        const response = await service._request({
+            url: `${service.baseUrl}/rest/modes`,
+            data: { locale: 'en' },
+            timeout: 30000
+        });
+
+        return extractGrokModelsFromModesResponse(response?.data);
+    } catch {
+        return [];
+    }
+}
+
 export async function detectAvailableModelsForProvider(providerType, tempConfig = {}) {
     if (providerType === 'openai-codex-oauth') {
         const codexModels = await inferCodexModels(tempConfig);
@@ -193,6 +306,10 @@ export async function detectAvailableModelsForProvider(providerType, tempConfig 
     }
 
     if (providerType === 'grok-custom') {
+        const grokModels = await detectGrokModels(tempConfig);
+        if (grokModels.length > 0) {
+            return grokModels;
+        }
         return normalizeModelIds(getProviderModels(providerType));
     }
 
@@ -222,6 +339,10 @@ export async function inferSupportedModelsFromProviderConfig(providerType, provi
     }
 
     if (providerType === 'grok-custom') {
+        const grokModels = await detectGrokModels(providerConfig);
+        if (grokModels.length > 0) {
+            return grokModels;
+        }
         return normalizeModelIds(getProviderModels(providerType));
     }
 

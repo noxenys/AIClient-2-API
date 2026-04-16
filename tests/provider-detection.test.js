@@ -4,6 +4,7 @@ import path from 'path';
 
 import {
     detectAvailableModelsForProvider,
+    extractGrokModelsFromModesResponse,
     getCodexModelsByPlanType
 } from '../src/providers/provider-detection.js';
 
@@ -55,10 +56,21 @@ describe('provider-detection helpers', () => {
     });
 
     test('returns static grok model list for grok custom nodes', async () => {
-        const models = await detectAvailableModelsForProvider('grok-custom', {
-            GROK_COOKIE_TOKEN: 'token'
+        const models = extractGrokModelsFromModesResponse({
+            modes: [
+                { id: 'auto', availability: { available: {} } },
+                { id: 'fast', availability: { available: {} } },
+                { id: 'expert', availability: { requiresUpgrade: { message: 'upgrade' } } },
+                { id: 'heavy', availability: { unavailable: { message: 'blocked' } } }
+            ],
+            defaultModeId: 'auto'
         });
 
+        expect(models).toEqual(['grok-4.20', 'grok-4.20-fast']);
+    });
+
+    test('falls back to static grok models when no dynamic modes are available', async () => {
+        const models = await detectAvailableModelsForProvider('grok-custom', {});
         expect(models).toContain('grok-4.20');
         expect(models).toContain('grok-4.20-heavy');
     });
