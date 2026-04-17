@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import { CONFIG } from '../core/config-manager.js';
 import { parseProxyUrl } from '../utils/proxy-utils.js';
 import { getRequestBody } from '../utils/common.js';
-import { canPerformSelfUpdate, normalizeUpdateMode, resolveEffectiveUpdateMode, sortAndFilterVersions } from '../utils/update-mode.js';
+import { canPerformSelfUpdate, compareVersions, normalizeUpdateMode, resolveEffectiveUpdateMode, sortAndFilterVersions } from '../utils/update-mode.js';
 
 const execAsync = promisify(exec);
 const DEFAULT_GITHUB_REPO = 'noxenys/AIClient-2-API';
