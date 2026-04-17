@@ -3396,8 +3396,14 @@ async function checkUpdate(silent = false) {
             if (versionSelectWrapper) versionSelectWrapper.style.display = 'block';
             if (updateBtn) {
                 updateBtn.style.display = 'inline-flex';
-                // 如果是回退，修改按钮文字
-                updateBtn.querySelector('span').textContent = t('dashboard.update.perform');
+                updateBtn.dataset.updateMode = data.updateMode || 'auto';
+                const updateLabel = data.canSelfUpdate
+                    ? t('dashboard.update.perform')
+                    : t('dashboard.update.redeploy');
+                updateBtn.querySelector('span').textContent = updateLabel;
+                updateBtn.title = data.canSelfUpdate
+                    ? t('dashboard.update.performTitle')
+                    : t('dashboard.update.redeployTitle');
             }
         }
 
@@ -3440,8 +3446,13 @@ async function performUpdate() {
     const updateBtn = document.getElementById('performUpdateBtn');
     const versionSelect = document.getElementById('versionSelect');
     const selectedVersion = versionSelect?.value || '';
+    const isRedeployMode = updateBtn?.dataset.updateMode === 'image';
 
-    if (!confirm(t('dashboard.update.confirmMsg', { version: selectedVersion }))) {
+    const confirmMessage = isRedeployMode
+        ? t('dashboard.update.redeployConfirmMsg', { version: selectedVersion })
+        : t('dashboard.update.confirmMsg', { version: selectedVersion });
+
+    if (!confirm(confirmMessage)) {
         return;
     }
 
@@ -3466,6 +3477,8 @@ async function performUpdate() {
                 
                 // 自动重启服务
                 await restartServiceAfterUpdate();
+            } else if (data.deploymentRequired) {
+                showToast(t('common.info'), data.message || t('dashboard.update.redeployHint', { version: selectedVersion }), 'info');
             } else {
                 // 已是目标版本
                 showToast(t('common.info'), data.message || t('dashboard.update.upToDate'), 'info');
@@ -3478,7 +3491,11 @@ async function performUpdate() {
         if (updateBtn) {
             updateBtn.disabled = false;
             if (updateBtnIcon) updateBtnIcon.className = 'fas fa-download';
-            if (updateBtnText) updateBtnText.textContent = t('dashboard.update.perform');
+            if (updateBtnText) {
+                updateBtnText.textContent = isRedeployMode
+                    ? t('dashboard.update.redeploy')
+                    : t('dashboard.update.perform');
+            }
         }
     }
 }

@@ -7,6 +7,7 @@ import { promisify } from 'util';
 import { CONFIG } from '../core/config-manager.js';
 import { parseProxyUrl } from '../utils/proxy-utils.js';
 import { getRequestBody } from '../utils/common.js';
+import { canPerformSelfUpdate, normalizeUpdateMode, resolveEffectiveUpdateMode, sortAndFilterVersions } from '../utils/update-mode.js';
 
 const execAsync = promisify(exec);
 const DEFAULT_GITHUB_REPO = 'noxenys/AIClient-2-API';
@@ -14,6 +15,10 @@ const DEFAULT_GITHUB_REPO = 'noxenys/AIClient-2-API';
 function getUpdateRepo() {
     const repo = CONFIG?.UPDATE_GITHUB_REPO || process.env.UPDATE_GITHUB_REPO || DEFAULT_GITHUB_REPO;
     return String(repo || DEFAULT_GITHUB_REPO).trim();
+}
+
+function getConfiguredUpdateMode() {
+    return normalizeUpdateMode(CONFIG?.UPDATE_MODE || process.env.UPDATE_MODE || 'auto');
 }
 
 function buildGitHubApiCandidates(repo) {
@@ -128,33 +133,6 @@ async function fetchWithProxy(url, options = {}) {
 }
 
 /**
- * 比较版本号
- * @param {string} v1 - 版本号1
- * @param {string} v2 - 版本号2
- * @returns {number} 1 if v1 > v2, -1 if v1 < v2, 0 if equal
- */
-function compareVersions(v1, v2) {
-    // 移除 'v' 前缀（如果有）
-    const clean1 = v1.replace(/^v/, '');
-    const clean2 = v2.replace(/^v/, '');
-    
-    const parts1 = clean1.split('.').map(Number);
-    const parts2 = clean2.split('.').map(Number);
-    
-    const maxLen = Math.max(parts1.length, parts2.length);
-    
-    for (let i = 0; i < maxLen; i++) {
-        const num1 = parts1[i] || 0;
-        const num2 = parts2[i] || 0;
-        
-        if (num1 > num2) return 1;
-        if (num1 < num2) return -1;
-    }
-    
-    return 0;
-}
-
-/**
  * 通过 GitHub API 获取最近的版本列表
  * @param {number} limit - 限制返回的版本数量
  * @returns {Promise<string[]>} 版本列表
@@ -185,18 +163,12 @@ async function getVersionsFromGitHub(limit = 10) {
                 continue;
             }
             
-            // 提取版本号并排序
-            const versions = tags
-                .map(tag => tag.name)
-                .filter(name => /^v?\d+\.\d+/.test(name));
-            
+            const versions = sortAndFilterVersions(tags.map(tag => tag.name), limit);
             if (versions.length === 0) {
                 logger.warn(`[Update] No valid version tags found via ${candidate.name}`);
                 continue;
             }
-            
-            versions.sort((a, b) => compareVersions(b, a));
-            return versions.slice(0, limit);
+            return versions;
         } catch (error) {
             logger.warn(`[Update] Failed to fetch versions via ${candidate.name}: ${error.message}`);
         }
@@ -244,12 +216,16 @@ export async function checkForUpdates() {
         isGitRepo = false;
         logger.info('[Update] Not in a Git repository, will use GitHub API to check for updates');
     }
+
+    const configuredUpdateMode = getConfiguredUpdateMode();
+    const effectiveUpdateMode = resolveEffectiveUpdateMode(configuredUpdateMode, isGitRepo);
+    const canSelfUpdate = canPerformSelfUpdate(effectiveUpdateMode) && !(effectiveUpdateMode === 'git' && !isGitRepo);
     
     let latestTag = null;
     let availableVersions = [];
     let updateMethod = 'unknown';
     
-    if (isGitRepo) {
+    if (effectiveUpdateMode === 'git' && isGitRepo) {
         // Git 仓库模式：使用 git命令
         updateMethod = 'git';
         
@@ -272,7 +248,7 @@ export async function checkForUpdates() {
                 const { stdout } = await execAsync('git tag --sort=-v:refname');
                 const tags = stdout.trim().split('\n').filter(t => t);
                 if (tags.length > 0) {
-                    availableVersions = tags.slice(0, 10);
+                    availableVersions = sortAndFilterVersions(tags, 10);
                     latestTag = availableVersions[0];
                 }
             } catch (error) {
@@ -283,7 +259,7 @@ export async function checkForUpdates() {
             }
         }
     } else {
-        // 非 Git 仓库模式（如 Docker 容器）：使用 GitHub API
+        // Docker/镜像模式或非 Git 仓库：使用 GitHub API 获取版本信息
         updateMethod = 'github_api';
         availableVersions = await getVersionsFromGitHub(10);
         latestTag = availableVersions.length > 0 ? availableVersions[0] : null;
@@ -296,6 +272,9 @@ export async function checkForUpdates() {
             latestVersion: null,
             availableVersions: [],
             updateMethod,
+            updateMode: effectiveUpdateMode,
+            configuredUpdateMode,
+            canSelfUpdate,
             error: 'Unable to get latest version information'
         };
     }
@@ -312,6 +291,9 @@ export async function checkForUpdates() {
         latestVersion: latestTag,
         availableVersions,
         updateMethod,
+        updateMode: effectiveUpdateMode,
+        configuredUpdateMode,
+        canSelfUpdate,
         error: null
     };
 }
@@ -355,8 +337,24 @@ export async function performUpdate(targetTag = null) {
         };
     }
     
+    if (!updateInfo.canSelfUpdate) {
+        const message = updateInfo.updateMode === 'image'
+            ? `Image deployment mode detected. Please redeploy the service with image version ${finalTag}.`
+            : `Self-update is unavailable in the current environment. Please deploy version ${finalTag} manually.`;
+        return {
+            success: true,
+            message,
+            localVersion: updateInfo.localVersion,
+            latestVersion: updateInfo.latestVersion,
+            targetVersion: finalTag,
+            updated: false,
+            deploymentRequired: true,
+            updateMode: updateInfo.updateMode
+        };
+    }
+
     // 检查更新方式 - 如果是通过 GitHub API 获取的版本信息，说明不在 Git 仓库中
-    if (updateInfo.updateMethod === 'github_api') {
+    if (updateInfo.updateMode === 'tarball') {
         // Docker/非 Git 环境，通过下载 tarball 更新
         logger.info(`[Update] Running in Docker/non-Git environment, will download and extract tarball for ${finalTag}`);
         return await performTarballUpdate(updateInfo.localVersion, finalTag);
@@ -432,7 +430,7 @@ export async function performUpdate(targetTag = null) {
  * @returns {Promise<Object>} 更新结果
  */
 async function performTarballUpdate(localVersion, latestTag) {
-    const tarballCandidates = buildTarballCandidates(GITHUB_REPO, latestTag);
+    const tarballCandidates = buildTarballCandidates(getUpdateRepo(), latestTag);
     const appDir = process.cwd();
     const tempDir = path.join(appDir, '.update_temp');
     const tarballPath = path.join(tempDir, 'update.tar.gz');
