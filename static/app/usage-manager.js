@@ -18,6 +18,13 @@ let usageManagerInitialized = false;
 let usageDataCache = null;
 let supportedProvidersCache = null;
 
+function getUsageInstanceRuntimeState(instance = {}) {
+    if (instance.state) return instance.state;
+    if (instance.isDisabled) return 'disabled';
+    if (instance.isHealthy) return 'healthy';
+    return 'risky';
+}
+
 /**
  * 更新提供商配置
  * @param {Array} configs - 提供商配置列表
@@ -284,7 +291,7 @@ function renderUsageData(data, container) {
         return;
     }
 
-    // 按提供商分组收集已初始化且未禁用的实例
+    // 按提供商分组收集实例
     const groupedInstances = {};
     
     for (const [providerType, providerData] of Object.entries(data.providers)) {
@@ -299,10 +306,6 @@ function renderUsageData(data, container) {
             for (const instance of providerData.instances) {
                 // 过滤掉服务实例未初始化的
                 if (instance.error === '服务实例未初始化' || instance.error === 'Service instance not initialized') {
-                    continue;
-                }
-                // 过滤掉已禁用的提供商
-                if (instance.isDisabled) {
                     continue;
                 }
                 validInstances.push(instance);
@@ -541,11 +544,16 @@ function createInstanceUsageCard(instance, providerType) {
     const header = document.createElement('div');
     header.className = 'usage-instance-header';
     
-    const healthBadge = instance.isDisabled
+    const runtimeState = getUsageInstanceRuntimeState(instance);
+    const healthBadge = runtimeState === 'disabled'
         ? `<span class="badge badge-disabled" data-i18n="usage.card.status.disabled">${t('usage.card.status.disabled')}</span>`
-        : (instance.isHealthy
+        : runtimeState === 'healthy'
             ? `<span class="badge badge-healthy" data-i18n="usage.card.status.healthy">${t('usage.card.status.healthy')}</span>`
-            : `<span class="badge badge-unhealthy" data-i18n="usage.card.status.unhealthy">${t('usage.card.status.unhealthy')}</span>`);
+            : runtimeState === 'cooldown'
+                ? `<span class="badge badge-unhealthy" data-i18n="usage.card.status.cooldown">${t('usage.card.status.cooldown')}</span>`
+                : runtimeState === 'banned'
+                    ? `<span class="badge badge-unhealthy" data-i18n="usage.card.status.banned">${t('usage.card.status.banned')}</span>`
+                    : `<span class="badge badge-unhealthy" data-i18n="usage.card.status.risky">${t('usage.card.status.risky')}</span>`;
 
     // 下载按钮
     const downloadBtnHTML = instance.configFilePath ? `
@@ -557,12 +565,24 @@ function createInstanceUsageCard(instance, providerType) {
     // 获取用户邮箱和订阅信息
     const userEmail = instance.usage?.user?.email || '';
     const subscriptionTitle = instance.usage?.subscription?.title || '';
+    const runtimeStateMeta = [];
+    if (runtimeState === 'cooldown' && instance.cooldownUntil) {
+        runtimeStateMeta.push(`${t('modal.provider.cooldownUntil')}: ${new Date(instance.cooldownUntil).toLocaleString(getCurrentLanguage())}`);
+    }
+    if (instance.lastStateReason) {
+        runtimeStateMeta.push(`${t('modal.provider.runtimeReason')}: ${instance.lastStateReason}`);
+    }
     
     // 用户信息行
     const userInfoHTML = userEmail ? `
         <div class="instance-user-info">
             <span class="user-email" title="${userEmail}"><i class="fas fa-envelope"></i> ${userEmail}</span>
             ${subscriptionTitle ? `<span class="user-subscription">${subscriptionTitle}</span>` : ''}
+        </div>
+    ` : '';
+    const runtimeStateInfoHTML = runtimeStateMeta.length > 0 ? `
+        <div class="instance-user-info">
+            <span class="user-subscription">${runtimeStateMeta.join(' | ')}</span>
         </div>
     ` : '';
 
@@ -584,6 +604,7 @@ function createInstanceUsageCard(instance, providerType) {
                   style="cursor: pointer; transition: color 0.2s;">${instance.name || instance.uuid}</span>
         </div>
         ${userInfoHTML}
+        ${runtimeStateInfoHTML}
     `;
     
     // 添加下载按钮点击事件

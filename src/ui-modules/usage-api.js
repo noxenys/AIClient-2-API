@@ -4,7 +4,7 @@ import { serviceInstances, getServiceAdapter } from '../providers/adapter.js';
 import { formatKiroUsage, formatGeminiUsage, formatAntigravityUsage, formatCodexUsage, formatGrokUsage } from '../services/usage-service.js';
 import { readUsageCache, writeUsageCache, readProviderUsageCache, updateProviderUsageCache } from './usage-cache.js';
 import { PROVIDER_MAPPINGS } from '../utils/provider-utils.js';
-import { isProviderStateSelectable } from '../utils/provider-state.js';
+import { inferProviderStateFromConfig, isProviderStateSelectable } from '../utils/provider-state.js';
 import path from 'path';
 
 const supportedProviders = ['claude-kiro-oauth', 'gemini-cli-oauth', 'gemini-antigravity', 'openai-codex-oauth', 'grok-custom'];
@@ -21,6 +21,10 @@ export function shouldQueryUsageForProvider(provider = {}) {
     }
 
     return provider.isHealthy !== false;
+}
+
+export function getUsageInstanceRuntimeState(provider = {}) {
+    return inferProviderStateFromConfig(provider);
 }
 
 async function withUsageTimeout(promise, timeoutMs = DEFAULT_USAGE_QUERY_TIMEOUT_MS) {
@@ -138,6 +142,9 @@ async function getProviderTypeUsage(providerType, currentConfig, providerPoolMan
             configFilePath: getProviderConfigFilePath(provider, providerType),
             isHealthy: provider.isHealthy !== false,
             isDisabled: provider.isDisabled === true,
+            state: getUsageInstanceRuntimeState(provider),
+            lastStateReason: provider.lastStateReason || provider.lastErrorMessage || null,
+            cooldownUntil: provider.cooldownUntil || null,
             success: false,
             usage: null,
             error: null
