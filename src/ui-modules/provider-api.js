@@ -13,6 +13,7 @@ import {
 } from '../providers/provider-detection.js';
 import { generateUUID, createProviderConfig, formatSystemPath, detectProviderFromPath, addToUsedPaths, isPathUsed, pathsEqual } from '../utils/provider-utils.js';
 import { removeProvidersByPredicate, shouldPermanentlyDeleteProvider } from '../utils/provider-cleanup.js';
+import { inferProviderStateFromConfig } from '../utils/provider-state.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, invalidateServiceAdapter } from '../providers/adapter.js';
 
@@ -23,6 +24,7 @@ import { getRegisteredProviders, invalidateServiceAdapter } from '../providers/a
 function sanitizeProviderData(provider, maskSensitive = false) {
     if (!provider || typeof provider !== 'object') return provider;
     const sanitized = { ...provider };
+    sanitized.state = inferProviderStateFromConfig(sanitized);
     
     // 1. 过滤敏感字段（API Keys, Tokens 等）
     if (maskSensitive) {
@@ -86,7 +88,7 @@ function getProviderStateCounts(providers = []) {
     };
 
     providers.forEach(provider => {
-        const state = typeof provider.state === 'string' ? provider.state : 'unknown';
+        const state = inferProviderStateFromConfig(provider);
         if (Object.prototype.hasOwnProperty.call(counts, state)) {
             counts[state]++;
         } else {
@@ -95,6 +97,16 @@ function getProviderStateCounts(providers = []) {
     });
 
     return counts;
+}
+
+function getProviderHealthSummary(providers = []) {
+    const stateCounts = getProviderStateCounts(providers);
+    return {
+        stateCounts,
+        healthyCount: stateCounts.healthy,
+        disabledCount: stateCounts.disabled,
+        unhealthyCount: stateCounts.cooldown + stateCounts.risky + stateCounts.banned + stateCounts.unknown
+    };
 }
 
 /**
@@ -342,11 +354,30 @@ export async function handleGetProviders(req, res, currentConfig, providerPoolMa
 
     // 合并生成支持的类型列表
     const supportedProviders = [...new Set([...registeredProviders, ...poolTypes])];
+    const providerStateCountsByType = {};
+    const globalStateCounts = {
+        healthy: 0,
+        cooldown: 0,
+        risky: 0,
+        banned: 0,
+        disabled: 0,
+        unknown: 0
+    };
+
+    Object.entries(providerStatus).forEach(([type, providers]) => {
+        const stateCounts = getProviderStateCounts(providers);
+        providerStateCountsByType[type] = stateCounts;
+        Object.keys(globalStateCounts).forEach(key => {
+            globalStateCounts[key] += stateCounts[key] || 0;
+        });
+    });
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         providers: sanitizeProviderPools(providerStatus, true), // 列表显示进行打码
-        supportedProviders: supportedProviders
+        supportedProviders: supportedProviders,
+        providerStateCountsByType,
+        globalStateCounts
     }));
     return true;
 }
@@ -369,14 +400,12 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
     }
 
     const providers = providerPools[providerType] || [];
-    const stateCounts = getProviderStateCounts(providers);
+    const { stateCounts, healthyCount, unhealthyCount } = getProviderHealthSummary(providers);
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const search = (url.searchParams.get('search') || '').trim();
     const pageParam = url.searchParams.get('page');
     const pageSizeParam = url.searchParams.get('pageSize');
     const usePaginatedResponse = pageParam !== null || pageSizeParam !== null || search !== '';
-    const healthyCount = providers.filter(p => p.isHealthy).length;
-    const unhealthyCount = providers.length - healthyCount;
 
     if (!usePaginatedResponse) {
         res.writeHead(200, { 'Content-Type': 'application/json' });

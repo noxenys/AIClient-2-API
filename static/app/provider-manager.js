@@ -38,6 +38,25 @@ function summarizeProviderState(account) {
     return 'risky';
 }
 
+function countAccountStates(accounts = []) {
+    return accounts.reduce((counts, account) => {
+        const state = summarizeProviderState(account);
+        if (Object.prototype.hasOwnProperty.call(counts, state)) {
+            counts[state]++;
+        } else {
+            counts.unknown++;
+        }
+        return counts;
+    }, {
+        healthy: 0,
+        cooldown: 0,
+        risky: 0,
+        banned: 0,
+        disabled: 0,
+        unknown: 0
+    });
+}
+
 function buildProviderListRenderKey(sortedProviderTypes, providers, configMap, searchTerm) {
     return sortedProviderTypes.map(providerType => {
         if (configMap[providerType] && configMap[providerType].visible === false) {
@@ -415,7 +434,8 @@ function renderProviders(providers, supportedProviders = []) {
         }
 
         const accounts = hasProviders ? providers[providerType] || [] : [];
-        const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
+        const stateCounts = countAccountStates(accounts);
+        const healthyCount = stateCounts.healthy;
         const totalCount = accounts.length;
         const usageCount = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
         const errorCount = accounts.reduce((sum, acc) => sum + (acc.errorCount || 0), 0);
@@ -478,15 +498,17 @@ function renderProviders(providers, supportedProviders = []) {
             providerDiv.dataset.providerType = providerType;
             providerDiv.style.cursor = 'pointer';
 
-            const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
+            const stateCounts = countAccountStates(accounts);
+            const healthyCount = stateCounts.healthy;
             const totalCount = accounts.length;
             const usageCount = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
             const errorCount = accounts.reduce((sum, acc) => sum + (acc.errorCount || 0), 0);
 
             // 为无数据状态设置特殊样式
             const isEmptyState = !hasProviders || totalCount === 0;
-            const statusClass = isEmptyState ? 'status-empty' : (healthyCount === totalCount ? 'status-healthy' : 'status-unhealthy');
-            const statusIcon = isEmptyState ? 'fa-info-circle' : (healthyCount === totalCount ? 'fa-check-circle' : 'fa-exclamation-triangle');
+            const abnormalCount = stateCounts.cooldown + stateCounts.risky + stateCounts.banned + stateCounts.unknown;
+            const statusClass = isEmptyState ? 'status-empty' : (abnormalCount === 0 ? 'status-healthy' : 'status-unhealthy');
+            const statusIcon = isEmptyState ? 'fa-info-circle' : (abnormalCount === 0 ? 'fa-check-circle' : 'fa-exclamation-triangle');
             const statusText = isEmptyState ? t('providers.status.empty') : t('providers.status.healthy', { healthy: healthyCount, total: totalCount });
 
             // 获取显示名称
@@ -611,6 +633,7 @@ function renderProviderStatusOverview(providers, configMap, sortedProviderTypes)
 
     validProviderTypes.forEach(type => {
         const accounts = providers[type];
+        const stateCounts = countAccountStates(accounts);
         const displayName = configMap[type]?.name || type;
         const card = document.createElement('div');
         card.className = 'provider-status-card';
@@ -624,10 +647,10 @@ function renderProviderStatusOverview(providers, configMap, sortedProviderTypes)
             }
         });
 
-        const healthyCount = accounts.filter(acc => acc.isHealthy && !acc.isDisabled).length;
+        const healthyCount = stateCounts.healthy;
         const totalCount = accounts.length;
-        const disabledCount = accounts.filter(acc => acc.isDisabled).length;
-        const unhealthyCount = totalCount - healthyCount - disabledCount;
+        const disabledCount = stateCounts.disabled;
+        const unhealthyCount = stateCounts.cooldown + stateCounts.risky + stateCounts.banned + stateCounts.unknown;
 
         const totalUsage = accounts.reduce((sum, acc) => sum + (acc.usageCount || 0), 0);
         const totalErrors = accounts.reduce((sum, acc) => sum + (acc.errorCount || 0), 0);
@@ -646,14 +669,15 @@ function renderProviderStatusOverview(providers, configMap, sortedProviderTypes)
 
             <div class="node-dots">
                 ${accounts.map(acc => {
+                    const runtimeState = summarizeProviderState(acc);
                     let statusClass = 'healthy';
                     let statusTitle = acc.customName || acc.uuid;
-                    if (acc.isDisabled) {
+                    if (runtimeState === 'disabled') {
                         statusClass = 'disabled';
                         statusTitle += ` (${t('modal.provider.status.disabled')})`;
-                    } else if (!acc.isHealthy) {
+                    } else if (runtimeState !== 'healthy') {
                         statusClass = 'unhealthy';
-                        statusTitle += ` (${t('modal.provider.status.unhealthy')})`;
+                        statusTitle += ` (${t(`modal.provider.runtimeState.${runtimeState}`) || t('modal.provider.status.unhealthy')})`;
                     } else {
                         statusTitle += ` (${t('modal.provider.status.healthy')})`;
                     }

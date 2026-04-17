@@ -34,7 +34,7 @@ describe('handleGetProviderType pagination', () => {
             { uuid: 'node-2', customName: 'beta', isHealthy: false, state: 'banned', GROK_COOKIE_TOKEN: 'secret-token-2' },
             { uuid: 'node-3', customName: 'gamma', isHealthy: true, state: 'healthy', GROK_COOKIE_TOKEN: 'secret-token-3' },
             { uuid: 'node-4', customName: 'delta', isHealthy: false, state: 'cooldown', GROK_COOKIE_TOKEN: 'secret-token-4' },
-            { uuid: 'node-5', customName: 'epsilon', isHealthy: true, state: 'healthy', GROK_COOKIE_TOKEN: 'secret-token-5' }
+            { uuid: 'node-5', customName: 'epsilon', isHealthy: false, isDisabled: true, state: 'disabled', GROK_COOKIE_TOKEN: 'secret-token-5' }
         ]
     };
 
@@ -62,14 +62,14 @@ describe('handleGetProviderType pagination', () => {
         expect(res.statusCode).toBe(200);
         expect(body.totalCount).toBe(5);
         expect(body.filteredCount).toBe(5);
-        expect(body.healthyCount).toBe(3);
+        expect(body.healthyCount).toBe(2);
         expect(body.unhealthyCount).toBe(2);
         expect(body.stateCounts).toEqual({
-            healthy: 3,
+            healthy: 2,
             cooldown: 1,
             risky: 0,
             banned: 1,
-            disabled: 0,
+            disabled: 1,
             unknown: 0
         });
         expect(body.page).toBe(2);
@@ -123,8 +123,10 @@ describe('handleGetProviderType pagination', () => {
         const body = parseResponseBody(res);
 
         expect(body.totalCount).toBe(5);
-        expect(body.healthyCount).toBe(3);
+        expect(body.healthyCount).toBe(2);
+        expect(body.unhealthyCount).toBe(2);
         expect(body.stateCounts.banned).toBe(1);
+        expect(body.stateCounts.disabled).toBe(1);
         expect(body.providers).toHaveLength(5);
         expect(body.page).toBeUndefined();
         expect(body.filteredCount).toBeUndefined();
