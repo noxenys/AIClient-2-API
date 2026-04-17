@@ -2,6 +2,7 @@
  * 自定义模型管理类 - 修复版
  */
 import { getProviderConfigs } from './utils.js';
+import { invalidateModelRegistryCache } from './model-registry-manager.js';
 
 export class CustomModelsManager {
     constructor() {
@@ -329,8 +330,12 @@ export class CustomModelsManager {
             } else {
                 await window.apiClient.post('/custom-models', data);
             }
+            invalidateModelRegistryCache();
             this.closeModal('customModelModal');
             await this.load();
+            if (typeof window.refreshModels === 'function') {
+                await window.refreshModels();
+            }
         } catch (e) { alert(e.message); }
     }
 
@@ -338,7 +343,11 @@ export class CustomModelsManager {
         if (!confirm('确定删除该自定义模型吗？')) return;
         try {
             await window.apiClient.delete(`/custom-models/${encodeURIComponent(id)}`);
+            invalidateModelRegistryCache();
             await this.load();
+            if (typeof window.refreshModels === 'function') {
+                await window.refreshModels();
+            }
         } catch (e) { alert(e.message); }
     }
 }

@@ -4,7 +4,7 @@
  */
 
 import { t } from './i18n.js';
-import { apiClient } from './auth.js';
+import { getProviderModelMap, invalidateModelRegistryCache } from './model-registry-manager.js';
 
 // 模型数据缓存
 let modelsCache = null;
@@ -34,7 +34,7 @@ async function fetchProviderModels() {
     }
     
     try {
-        modelsCache = await apiClient.get('/provider-models');
+        modelsCache = await getProviderModelMap();
         return modelsCache;
     } catch (error) {
         console.error('[Models Manager] Failed to fetch provider models:', error);
@@ -318,6 +318,7 @@ async function initModelsManager() {
  * 刷新模型列表
  */
 async function refreshModels() {
+    invalidateModelRegistryCache();
     modelsCache = null;
     await initModelsManager();
 }

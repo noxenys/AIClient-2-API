@@ -8,6 +8,9 @@ import {
     usesManagedModelList
 } from '../providers/provider-models.js';
 import {
+    buildModelRegistryPayload
+} from '../providers/model-registry.js';
+import {
     detectAvailableModelsForProvider,
     inferSupportedModelsFromProviderConfig
 } from '../providers/provider-detection.js';
@@ -173,10 +176,13 @@ function loadProviderPools(currentConfig, providerPoolManager) {
     return JSON.parse(readFileSync(filePath, 'utf-8'));
 }
 
-function getManagedSupportedModels(providerType, providers = []) {
-    return normalizeModelIds(
-        providers.flatMap(provider => getConfiguredSupportedModels(providerType, provider))
-    );
+function getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, providerTypes = []) {
+    const providerPools = loadProviderPools(currentConfig, providerPoolManager);
+    return buildModelRegistryPayload({
+        providerTypes,
+        providerPools,
+        customModels: currentConfig?.customModels || []
+    });
 }
 
 function parsePositiveInteger(value, fallback, { min = 1, max = 200 } = {}) {
@@ -522,31 +528,14 @@ export async function handleGetSupportedProviders(req, res, currentConfig, provi
  */
 export async function handleGetProviderModels(req, res, currentConfig, providerPoolManager) {
     const registeredProviders = getRegisteredProviders();
-    let providerPools = {};
+    let allModels = {};
 
-    // 获取所有存在的类型（基础 + 动态）
     try {
-        providerPools = loadProviderPools(currentConfig, providerPoolManager);
+        const payload = getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, registeredProviders);
+        allModels = payload.providerModelMap;
     } catch (error) {
-        logger.warn('[UI API] Failed to load provider pools for models:', error.message);
+        logger.warn('[UI API] Failed to build model registry payload:', error.message);
     }
-
-    const poolTypes = Object.keys(providerPools);
-    const allTypes = [...new Set([...registeredProviders, ...poolTypes])];
-    const allModels = {};
-
-    allTypes.forEach(type => {
-        let models = getProviderModels(type);
-        if (usesManagedModelList(type)) {
-            const managedModels = getManagedSupportedModels(type, providerPools[type] || []);
-            if (managedModels.length > 0) {
-                models = managedModels;
-            }
-        }
-        if (models && models.length > 0) {
-            allModels[type] = models;
-        }
-    });
 
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(allModels));
@@ -557,17 +546,13 @@ export async function handleGetProviderModels(req, res, currentConfig, providerP
  * 获取特定提供商类型的可用模型
  */
 export async function handleGetProviderTypeModels(req, res, currentConfig, providerPoolManager, providerType) {
-    let models = getProviderModels(providerType);
-    if (usesManagedModelList(providerType)) {
-        try {
-            const providerPools = loadProviderPools(currentConfig, providerPoolManager);
-            const managedModels = getManagedSupportedModels(providerType, providerPools[providerType] || []);
-            if (managedModels.length > 0) {
-                models = managedModels;
-            }
-        } catch (error) {
-            logger.warn('[UI API] Failed to load managed provider models:', error.message);
-        }
+    let models = [];
+    try {
+        const payload = getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, [providerType]);
+        models = payload.providerModelMap[providerType] || [];
+    } catch (error) {
+        logger.warn('[UI API] Failed to load provider type models from registry:', error.message);
+        models = getProviderModels(providerType);
     }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -575,6 +560,22 @@ export async function handleGetProviderTypeModels(req, res, currentConfig, provi
         models
     }));
     return true;
+}
+
+export async function handleGetModelRegistry(req, res, currentConfig, providerPoolManager) {
+    const registeredProviders = getRegisteredProviders();
+
+    try {
+        const payload = getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, registeredProviders);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+        return true;
+    } catch (error) {
+        logger.error('[UI API] Failed to build model registry:', error.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    }
 }
 
 /**

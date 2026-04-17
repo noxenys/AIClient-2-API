@@ -137,6 +137,10 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
     }
 
     // Get available models for all providers or specific provider type
+    if (method === 'GET' && pathParam === '/api/model-registry') {
+        return await providerApi.handleGetModelRegistry(req, res, currentConfig, providerPoolManager);
+    }
+
     if (method === 'GET' && pathParam === '/api/provider-models') {
         return await providerApi.handleGetProviderModels(req, res, currentConfig, providerPoolManager);
     }
