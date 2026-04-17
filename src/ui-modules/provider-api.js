@@ -109,6 +109,30 @@ function getProviderHealthSummary(providers = []) {
     };
 }
 
+function buildProviderSummary(providers = [], previewLimit = 24) {
+    const { stateCounts, healthyCount, disabledCount, unhealthyCount } = getProviderHealthSummary(providers);
+    return {
+        totalCount: providers.length,
+        healthyCount,
+        disabledCount,
+        unhealthyCount,
+        stateCounts,
+        totalUsage: providers.reduce((sum, provider) => sum + (provider.usageCount || 0), 0),
+        totalErrors: providers.reduce((sum, provider) => sum + (provider.errorCount || 0), 0),
+        previewNodes: providers.slice(0, previewLimit).map(provider => ({
+            uuid: provider.uuid,
+            customName: provider.customName || null,
+            state: inferProviderStateFromConfig(provider),
+            isHealthy: inferProviderStateFromConfig(provider) === 'healthy',
+            isDisabled: inferProviderStateFromConfig(provider) === 'disabled',
+            usageCount: provider.usageCount || 0,
+            errorCount: provider.errorCount || 0,
+            cooldownUntil: provider.cooldownUntil || null,
+            lastStateReason: provider.lastStateReason || provider.lastErrorMessage || null
+        }))
+    };
+}
+
 /**
  * 过滤掉数据中的脱敏占位符，避免在保存时覆盖真实数据
  */
@@ -310,6 +334,8 @@ function withFileLock(fn) {
  * 获取所有提供商的状态（包括支持的类型和号池组）
  */
 export async function handleGetProviders(req, res, currentConfig, providerPoolManager) {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const summaryOnly = url.searchParams.get('summary') === 'true';
     // 1. 获取支持的基础提供商类型
     const registeredProviders = getRegisteredProviders();
     let poolTypes = [];
@@ -355,6 +381,7 @@ export async function handleGetProviders(req, res, currentConfig, providerPoolMa
     // 合并生成支持的类型列表
     const supportedProviders = [...new Set([...registeredProviders, ...poolTypes])];
     const providerStateCountsByType = {};
+    const providersSummary = {};
     const globalStateCounts = {
         healthy: 0,
         cooldown: 0,
@@ -367,15 +394,29 @@ export async function handleGetProviders(req, res, currentConfig, providerPoolMa
     Object.entries(providerStatus).forEach(([type, providers]) => {
         const stateCounts = getProviderStateCounts(providers);
         providerStateCountsByType[type] = stateCounts;
+        providersSummary[type] = buildProviderSummary(providers);
         Object.keys(globalStateCounts).forEach(key => {
             globalStateCounts[key] += stateCounts[key] || 0;
         });
     });
 
+    if (summaryOnly) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            summaryMode: true,
+            supportedProviders,
+            providersSummary,
+            providerStateCountsByType,
+            globalStateCounts
+        }));
+        return true;
+    }
+
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
         providers: sanitizeProviderPools(providerStatus, true), // 列表显示进行打码
         supportedProviders: supportedProviders,
+        providersSummary,
         providerStateCountsByType,
         globalStateCounts
     }));

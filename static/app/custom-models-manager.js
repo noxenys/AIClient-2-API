@@ -78,10 +78,10 @@ export class CustomModelsManager {
         const client = window.apiClient;
         if (!client) return;
         try {
-            const response = await client.get('/providers');
-            if (response && response.supportedProviders) {
+            const response = await client.get('/providers/supported');
+            if (Array.isArray(response) && response.length > 0) {
                 // 使用 utils 中的标准方法处理提供商列表，获取友好名称
-                this.providers = getProviderConfigs(response.supportedProviders);
+                this.providers = getProviderConfigs(response);
                 this.updateProviderOptions();
             }
         } catch (e) { console.error(e); }

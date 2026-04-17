@@ -44,7 +44,7 @@ describe('handleGetProviders summary', () => {
         };
         const res = createMockResponse();
 
-        await handleGetProviders({}, res, {}, providerPoolManager);
+        await handleGetProviders({ url: '/api/providers', headers: { host: 'localhost' } }, res, {}, providerPoolManager);
         const body = JSON.parse(res.body);
 
         expect(res.statusCode).toBe(200);
@@ -74,5 +74,33 @@ describe('handleGetProviders summary', () => {
         });
         expect(body.providers['grok-custom'][0].activeRequests).toBe(1);
         expect(body.providers['openai-custom'][0].waitingRequests).toBe(2);
+    });
+
+    test('returns lightweight summary payload when summary=true', async () => {
+        const providerPoolManager = {
+            providerStatus: {
+                'grok-custom': [
+                    { uuid: 'g1', config: { uuid: 'g1', state: 'healthy', isHealthy: true, customName: 'alpha', usageCount: 2, errorCount: 0 }, state: { activeCount: 1, waitingCount: 0 } },
+                    { uuid: 'g2', config: { uuid: 'g2', state: 'cooldown', isHealthy: false, customName: 'beta', usageCount: 0, errorCount: 1, cooldownUntil: '2099-01-01T00:00:00.000Z' }, state: { activeCount: 0, waitingCount: 0 } }
+                ]
+            }
+        };
+        const req = {
+            url: '/api/providers?summary=true',
+            headers: { host: 'localhost' }
+        };
+        const res = createMockResponse();
+
+        await handleGetProviders(req, res, {}, providerPoolManager);
+        const body = JSON.parse(res.body);
+
+        expect(body.summaryMode).toBe(true);
+        expect(body.providers).toBeUndefined();
+        expect(body.providersSummary['grok-custom'].totalCount).toBe(2);
+        expect(body.providersSummary['grok-custom'].healthyCount).toBe(1);
+        expect(body.providersSummary['grok-custom'].unhealthyCount).toBe(1);
+        expect(body.providersSummary['grok-custom'].previewNodes).toHaveLength(2);
+        expect(body.providersSummary['grok-custom'].previewNodes[1].state).toBe('cooldown');
+        expect(body.providersSummary['grok-custom'].previewNodes[1].cooldownUntil).toBeTruthy();
     });
 });

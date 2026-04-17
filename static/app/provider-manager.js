@@ -19,6 +19,7 @@ let initialLoadTime = null;
 let isStaticProviderConfigsUpdated = false;
 let cachedSupportedProviders = null;
 let cachedProvidersSnapshot = null;
+let cachedProviderSummariesSnapshot = null;
 let lastProvidersListRenderKey = null;
 let lastDashboardRenderKey = null;
 let providerListInteractionsBound = false;
@@ -78,6 +79,36 @@ function buildDashboardRenderKey(sortedProviderTypes, providers) {
         return `${providerType}:[${accounts.map(account =>
             `${account.uuid}:${summarizeProviderState(account)}:${account.usageCount || 0}:${account.errorCount || 0}`
         ).join(',')}]`;
+    }).join('|');
+}
+
+function buildProviderSummaryListRenderKey(sortedProviderTypes, summaries, configMap, searchTerm) {
+    return sortedProviderTypes.map(providerType => {
+        if (configMap[providerType] && configMap[providerType].visible === false) {
+            return `${providerType}:hidden`;
+        }
+
+        const summary = summaries[providerType] || {};
+        const stateCounts = summary.stateCounts || {};
+        return [
+            providerType,
+            summary.totalCount || 0,
+            summary.healthyCount || 0,
+            stateCounts.cooldown || 0,
+            stateCounts.risky || 0,
+            stateCounts.banned || 0,
+            stateCounts.disabled || 0,
+            summary.totalUsage || 0,
+            summary.totalErrors || 0
+        ].join(':');
+    }).join('|') + `#search:${searchTerm}`;
+}
+
+function buildDashboardSummaryRenderKey(sortedProviderTypes, summaries) {
+    return sortedProviderTypes.map(providerType => {
+        const summary = summaries[providerType] || {};
+        const previewNodes = summary.previewNodes || [];
+        return `${providerType}:${summary.totalCount || 0}:${summary.healthyCount || 0}:${summary.unhealthyCount || 0}:${summary.disabledCount || 0}:[${previewNodes.map(node => `${node.uuid}:${summarizeProviderState(node)}`).join(',')}]`;
     }).join('|');
 }
 
@@ -328,12 +359,11 @@ function updateTimeDisplay() {
  */
 async function loadProviders(forceRefreshSupported = false) {
     try {
-        // 获取合并后的数据（包括 providers 和 supportedProviders）
-        const data = await window.apiClient.get('/providers');
-        if (!data || !data.providers) return;
+        const data = await window.apiClient.get('/providers?summary=true');
+        if (!data || !data.providersSummary) return;
 
-        const { providers, supportedProviders } = data;
-        cachedProvidersSnapshot = providers;
+        const { providersSummary, supportedProviders } = data;
+        cachedProviderSummariesSnapshot = providersSummary;
         
         // 检查支持列表是否发生了变化（或者是否尚未初始化）
         const isChanged = !cachedSupportedProviders || 
@@ -365,6 +395,11 @@ async function loadProviders(forceRefreshSupported = false) {
 }
 
 function renderCachedProviderViews() {
+    if (cachedProviderSummariesSnapshot && cachedSupportedProviders) {
+        renderProviderSummaries(cachedProviderSummariesSnapshot, cachedSupportedProviders);
+        return;
+    }
+
     if (!cachedProvidersSnapshot || !cachedSupportedProviders) {
         return;
     }
@@ -567,6 +602,165 @@ function renderProviders(providers, supportedProviders = []) {
     // 渲染仪表盘提供商状态概览
     if (dashboardActive && dashboardRenderKey !== lastDashboardRenderKey) {
         renderProviderStatusOverview(providers, configMap, sortedProviderTypes);
+        lastDashboardRenderKey = dashboardRenderKey;
+    }
+}
+
+function renderProviderSummaries(summaries, supportedProviders = []) {
+    const container = document.getElementById('providersList');
+    const dashboardActive = isSectionActive('dashboard');
+    const providersActive = isSectionActive('providers');
+    if (!container && !dashboardActive) return;
+    if (container) {
+        bindProviderListInteractions(container);
+    }
+
+    const hasProviders = Object.keys(summaries).length > 0;
+    const statsGrid = providersActive ? document.querySelector('#providers .stats-grid') : null;
+    if (statsGrid) statsGrid.style.display = 'grid';
+
+    const providerConfigs = getProviderConfigs(supportedProviders);
+    const providerDisplayOrder = providerConfigs.filter(c => c.visible !== false).map(c => c.id);
+    const configMap = providerConfigs.reduce((map, config) => {
+        map[config.id] = config;
+        return map;
+    }, {});
+
+    let allProviderTypes;
+    if (hasProviders) {
+        const actualProviderTypes = Object.keys(summaries);
+        allProviderTypes = [...new Set([...providerDisplayOrder, ...actualProviderTypes])];
+    } else {
+        allProviderTypes = providerDisplayOrder;
+    }
+
+    const sortedProviderTypes = providerDisplayOrder.filter(type => allProviderTypes.includes(type))
+        .concat(allProviderTypes.filter(type => !providerDisplayOrder.some(t => t === type) && !configMap[type]?.visible === false));
+
+    let totalAccounts = 0;
+    let totalHealthy = 0;
+    const searchInput = document.getElementById('providerSearchInput');
+    const searchTerm = searchInput ? searchInput.value.toLowerCase().trim() : '';
+
+    sortedProviderTypes.forEach(providerType => {
+        if (configMap[providerType] && configMap[providerType].visible === false) {
+            return;
+        }
+
+        const summary = hasProviders ? summaries[providerType] || {} : {};
+        totalAccounts += summary.totalCount || 0;
+        totalHealthy += summary.healthyCount || 0;
+
+        if (!providerStats.providerTypeStats[providerType]) {
+            providerStats.providerTypeStats[providerType] = {
+                totalAccounts: 0,
+                healthyAccounts: 0,
+                totalUsage: 0,
+                totalErrors: 0,
+                lastUpdate: null
+            };
+        }
+
+        const typeStats = providerStats.providerTypeStats[providerType];
+        typeStats.totalAccounts = summary.totalCount || 0;
+        typeStats.healthyAccounts = summary.healthyCount || 0;
+        typeStats.totalUsage = summary.totalUsage || 0;
+        typeStats.totalErrors = summary.totalErrors || 0;
+        typeStats.lastUpdate = new Date().toISOString();
+    });
+
+    const providerListRenderKey = buildProviderSummaryListRenderKey(sortedProviderTypes, summaries, configMap, searchTerm);
+    const dashboardRenderKey = buildDashboardSummaryRenderKey(sortedProviderTypes, summaries);
+
+    if (providersActive && container && providerListRenderKey !== lastProvidersListRenderKey) {
+        container.innerHTML = '';
+
+        sortedProviderTypes.forEach((providerType) => {
+            if (configMap[providerType] && configMap[providerType].visible === false) {
+                return;
+            }
+
+            const summary = hasProviders ? summaries[providerType] || {} : {};
+            const previewNodes = summary.previewNodes || [];
+
+            if (searchTerm) {
+                const displayName = (configMap[providerType]?.name || providerType).toLowerCase();
+                const matchesType = displayName.includes(searchTerm) || providerType.toLowerCase().includes(searchTerm);
+                const matchesNodes = previewNodes.some(node =>
+                    (node.customName || '').toLowerCase().includes(searchTerm) ||
+                    (node.uuid || '').toLowerCase().includes(searchTerm)
+                );
+
+                if (!matchesType && !matchesNodes) {
+                    return;
+                }
+            }
+
+            const healthyCount = summary.healthyCount || 0;
+            const totalCount = summary.totalCount || 0;
+            const usageCount = summary.totalUsage || 0;
+            const errorCount = summary.totalErrors || 0;
+            const stateCounts = summary.stateCounts || {};
+            const abnormalCount = (stateCounts.cooldown || 0) + (stateCounts.risky || 0) + (stateCounts.banned || 0) + (stateCounts.unknown || 0);
+            const isEmptyState = !hasProviders || totalCount === 0;
+            const statusClass = isEmptyState ? 'status-empty' : (abnormalCount === 0 ? 'status-healthy' : 'status-unhealthy');
+            const statusIcon = isEmptyState ? 'fa-info-circle' : (abnormalCount === 0 ? 'fa-check-circle' : 'fa-exclamation-triangle');
+            const statusText = isEmptyState ? t('providers.status.empty') : t('providers.status.healthy', { healthy: healthyCount, total: totalCount });
+            const displayName = configMap[providerType]?.name || providerType;
+
+            const providerDiv = document.createElement('div');
+            providerDiv.className = 'provider-item';
+            providerDiv.dataset.providerType = providerType;
+            providerDiv.style.cursor = 'pointer';
+            providerDiv.innerHTML = `
+                <div class="provider-header">
+                    <div class="provider-name">
+                        <span class="provider-type-text">${displayName}</span>
+                    </div>
+                    <div class="provider-header-right">
+                        ${generateAddGroupButton(providerType)}
+                        ${generateAuthButton(providerType)}
+                        <div class="provider-status ${statusClass}">
+                            <i class="fas fa-${statusIcon}"></i>
+                            <span>${statusText}</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="provider-stats">
+                    <div class="provider-stat">
+                        <span class="provider-stat-label" data-i18n="providers.stat.totalAccounts">${t('providers.stat.totalAccounts')}</span>
+                        <span class="provider-stat-value">${totalCount}</span>
+                    </div>
+                    <div class="provider-stat">
+                        <span class="provider-stat-label" data-i18n="providers.stat.healthyAccounts">${t('providers.stat.healthyAccounts')}</span>
+                        <span class="provider-stat-value">${healthyCount}</span>
+                    </div>
+                    <div class="provider-stat">
+                        <span class="provider-stat-label" data-i18n="providers.stat.usageCount">${t('providers.stat.usageCount')}</span>
+                        <span class="provider-stat-value">${usageCount}</span>
+                    </div>
+                    <div class="provider-stat">
+                        <span class="provider-stat-label" data-i18n="providers.stat.errorCount">${t('providers.stat.errorCount')}</span>
+                        <span class="provider-stat-value">${errorCount}</span>
+                    </div>
+                </div>
+            `;
+            if (isEmptyState) {
+                providerDiv.classList.add('empty-provider');
+            }
+            container.appendChild(providerDiv);
+        });
+
+        lastProvidersListRenderKey = providerListRenderKey;
+    }
+
+    if (providersActive) {
+        const activeProviders = hasProviders ? Object.keys(summaries).length : 0;
+        updateProviderStatsDisplay(activeProviders, totalHealthy, totalAccounts);
+    }
+
+    if (dashboardActive && dashboardRenderKey !== lastDashboardRenderKey) {
+        renderProviderStatusOverviewSummary(summaries, configMap, sortedProviderTypes);
         lastDashboardRenderKey = dashboardRenderKey;
     }
 }
@@ -3522,6 +3716,85 @@ async function performUpdate() {
             }
         }
     }
+}
+
+function renderProviderStatusOverviewSummary(summaries, configMap, sortedProviderTypes) {
+    const grid = document.getElementById('providerStatusGrid');
+    const panel = document.querySelector('.provider-status-panel');
+    if (!grid || !panel) return;
+
+    const validProviderTypes = sortedProviderTypes.filter(type => (summaries[type]?.totalCount || 0) > 0);
+    if (validProviderTypes.length === 0) {
+        panel.style.display = 'none';
+        const dashboardDetails = document.querySelector('.dashboard-details');
+        if (dashboardDetails) {
+            dashboardDetails.open = true;
+        }
+        return;
+    }
+
+    panel.style.display = 'block';
+    grid.innerHTML = '';
+
+    validProviderTypes.forEach(type => {
+        const summary = summaries[type] || {};
+        const previewNodes = summary.previewNodes || [];
+        const displayName = configMap[type]?.name || type;
+        const healthyCount = summary.healthyCount || 0;
+        const totalCount = summary.totalCount || 0;
+        const stateCounts = summary.stateCounts || {};
+        const disabledCount = stateCounts.disabled || 0;
+        const unhealthyCount = (stateCounts.cooldown || 0) + (stateCounts.risky || 0) + (stateCounts.banned || 0) + (stateCounts.unknown || 0);
+        const hiddenPreviewCount = Math.max(0, totalCount - previewNodes.length);
+
+        const card = document.createElement('div');
+        card.className = 'provider-status-card';
+        card.style.cursor = 'pointer';
+        card.addEventListener('click', () => {
+            const providersNav = document.querySelector('[data-section="providers"]');
+            if (providersNav) {
+                providersNav.click();
+                setTimeout(() => openProviderManager(type), 100);
+            }
+        });
+
+        card.innerHTML = `
+            <div class="provider-info">
+                <span class="provider-name" title="${displayName}">${displayName}</span>
+                <span class="provider-count" style="font-size: 0.75rem; color: var(--text-secondary);">${healthyCount}/${totalCount}</span>
+            </div>
+            <div class="provider-nodes-summary">
+                <span style="color: #10b981;"><i class="fas fa-check"></i> ${healthyCount}</span>
+                <span style="color: #ef4444; ${unhealthyCount === 0 ? 'opacity: 0.3;' : ''}"><i class="fas fa-times"></i> ${unhealthyCount}</span>
+                <span style="color: #9ca3af; ${disabledCount === 0 ? 'opacity: 0.3;' : ''}"><i class="fas fa-minus-circle"></i> ${disabledCount}</span>
+            </div>
+            <div class="node-dots">
+                ${previewNodes.map(acc => {
+                    const runtimeState = summarizeProviderState(acc);
+                    let statusClass = 'healthy';
+                    let statusTitle = acc.customName || acc.uuid;
+                    if (runtimeState === 'disabled') {
+                        statusClass = 'disabled';
+                        statusTitle += ` (${t('modal.provider.status.disabled')})`;
+                    } else if (runtimeState !== 'healthy') {
+                        statusClass = 'unhealthy';
+                        statusTitle += ` (${t(`modal.provider.runtimeState.${runtimeState}`) || t('modal.provider.status.unhealthy')})`;
+                    } else {
+                        statusTitle += ` (${t('modal.provider.status.healthy')})`;
+                    }
+                    statusTitle += `\n${t('providers.stat.usageCount')}: ${acc.usageCount || 0}\n${t('providers.stat.errorCount')}: ${acc.errorCount || 0}`;
+                    return `<span class="node-dot ${statusClass}" title="${statusTitle}" onclick="window.jumpToProviderNode('${type}', '${acc.uuid}', event)"></span>`;
+                }).join('')}
+                ${hiddenPreviewCount > 0 ? `<span class="node-dot disabled" title="+${hiddenPreviewCount} more">+${hiddenPreviewCount}</span>` : ''}
+            </div>
+            <div class="provider-stats-summary">
+                <span><i class="fas fa-paper-plane" style="font-size: 0.7rem; opacity: 0.7;"></i> ${summary.totalUsage || 0}</span>
+                <span><i class="fas fa-exclamation-circle" style="font-size: 0.7rem; opacity: 0.7;"></i> ${summary.totalErrors || 0}</span>
+                <span class="success-rate">${(summary.totalUsage || 0) > 0 ? (((summary.totalUsage || 0) - (summary.totalErrors || 0)) / (summary.totalUsage || 1) * 100).toFixed(1) + '%' : '--'}</span>
+            </div>
+        `;
+        grid.appendChild(card);
+    });
 }
 
 /**
