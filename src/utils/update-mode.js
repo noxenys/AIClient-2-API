@@ -15,7 +15,7 @@ export function resolveEffectiveUpdateMode(configuredMode, isGitRepo) {
 }
 
 export function canPerformSelfUpdate(mode) {
-    return normalizeUpdateMode(mode) !== 'image';
+    return VALID_UPDATE_MODES.has(normalizeUpdateMode(mode));
 }
 
 export function compareVersions(v1, v2) {

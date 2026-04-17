@@ -3698,10 +3698,13 @@ async function checkUpdate(silent = false) {
             if (updateBtn) {
                 updateBtn.style.display = 'inline-flex';
                 updateBtn.dataset.updateMode = data.updateMode || 'auto';
-                const updateLabel = data.canSelfUpdate
-                    ? t('dashboard.update.perform')
-                    : t('dashboard.update.redeploy');
-                updateBtn.querySelector('span').textContent = updateLabel;
+                updateBtn.dataset.canSelfUpdate = data.canSelfUpdate ? 'true' : 'false';
+                const updateTextEl = updateBtn.querySelector('span');
+                if (updateTextEl) {
+                    updateTextEl.textContent = data.canSelfUpdate
+                        ? t('dashboard.update.perform')
+                        : t('dashboard.update.redeploy');
+                }
                 updateBtn.title = data.canSelfUpdate
                     ? t('dashboard.update.performTitle')
                     : t('dashboard.update.redeployTitle');
@@ -3759,7 +3762,9 @@ async function runVersionAction(targetVersion, actionType = 'update') {
     const actionBtn = actionType === 'rollback'
         ? document.getElementById('rollbackUpdateBtn')
         : document.getElementById('performUpdateBtn');
-    const isRedeployMode = actionBtn?.dataset.updateMode === 'image';
+    const canSelfUpdate = actionType === 'rollback'
+        ? true
+        : actionBtn?.dataset.canSelfUpdate !== 'false';
 
     if (!targetVersion) {
         showToast(t('common.warning'), t('dashboard.update.noRollbackTarget'), 'warning');
@@ -3767,12 +3772,8 @@ async function runVersionAction(targetVersion, actionType = 'update') {
     }
 
     const confirmMessage = actionType === 'rollback'
-        ? (isRedeployMode
-            ? t('dashboard.update.rollbackRedeployConfirmMsg', { version: targetVersion })
-            : t('dashboard.update.rollbackConfirmMsg', { version: targetVersion }))
-        : (isRedeployMode
-            ? t('dashboard.update.redeployConfirmMsg', { version: targetVersion })
-            : t('dashboard.update.confirmMsg', { version: targetVersion }));
+        ? t('dashboard.update.rollbackConfirmMsg', { version: targetVersion })
+        : t('dashboard.update.confirmMsg', { version: targetVersion });
 
     if (!confirm(confirmMessage)) {
         return;
@@ -3790,7 +3791,10 @@ async function runVersionAction(targetVersion, actionType = 'update') {
 
         showToast(t('common.info'), t('dashboard.update.updating'), 'info');
 
-        const data = await window.apiClient.post('/update', { version: targetVersion });
+        const data = await window.apiClient.post('/update', {
+            version: targetVersion,
+            action: actionType
+        });
 
         if (data.success) {
             if (data.updated) {
@@ -3820,9 +3824,9 @@ async function runVersionAction(targetVersion, actionType = 'update') {
             if (actionBtnText) {
                 actionBtnText.textContent = actionType === 'rollback'
                     ? t('dashboard.update.rollback')
-                    : (isRedeployMode
-                        ? t('dashboard.update.redeploy')
-                        : t('dashboard.update.perform'));
+                    : (canSelfUpdate
+                        ? t('dashboard.update.perform')
+                        : t('dashboard.update.redeploy'));
             }
         }
     }

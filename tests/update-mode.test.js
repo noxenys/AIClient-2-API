@@ -19,8 +19,8 @@ describe('update mode helpers', () => {
         expect(resolveEffectiveUpdateMode('auto', false)).toBe('image');
     });
 
-    test('image mode never performs self update', () => {
-        expect(canPerformSelfUpdate('image')).toBe(false);
+    test('image mode supports in-container self update', () => {
+        expect(canPerformSelfUpdate('image')).toBe(true);
         expect(canPerformSelfUpdate('git')).toBe(true);
         expect(canPerformSelfUpdate('tarball')).toBe(true);
     });

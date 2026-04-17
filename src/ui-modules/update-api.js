@@ -373,9 +373,10 @@ export async function checkForUpdates() {
 /**
  * 执行更新操作
  * @param {string} targetTag - 目标版本 tag，如果未提供则更新到最新版本
+ * @param {string} actionType - 动作类型，update 或 rollback
  * @returns {Promise<Object>} 更新结果
  */
-export async function performUpdate(targetTag = null) {
+export async function performUpdate(targetTag = null, actionType = 'update') {
     // 首先检查是否有更新
     const updateInfo = await checkForUpdates();
     
@@ -411,7 +412,7 @@ export async function performUpdate(targetTag = null) {
     
     if (!updateInfo.canSelfUpdate) {
         const message = updateInfo.updateMode === 'image'
-            ? `Image deployment mode detected. Please redeploy the service with image version ${finalTag}.`
+            ? `Image deployment mode is not writable in the current environment. Please deploy version ${finalTag} manually.`
             : `Self-update is unavailable in the current environment. Please deploy version ${finalTag} manually.`;
         return {
             success: true,
@@ -426,9 +427,9 @@ export async function performUpdate(targetTag = null) {
     }
 
     // 检查更新方式 - 如果是通过 GitHub API 获取的版本信息，说明不在 Git 仓库中
-    if (updateInfo.updateMode === 'tarball') {
-        // Docker/非 Git 环境，通过下载 tarball 更新
-        logger.info(`[Update] Running in Docker/non-Git environment, will download and extract tarball for ${finalTag}`);
+    if (updateInfo.updateMode === 'tarball' || updateInfo.updateMode === 'image') {
+        // 非 Git 环境通过下载 tarball 更新；image 模式同样沿用容器内替换逻辑
+        logger.info(`[Update] Running in ${updateInfo.updateMode} mode, will download and extract tarball for ${finalTag}`);
         return await performTarballUpdate(updateInfo.localVersion, finalTag);
     }
     
@@ -651,6 +652,7 @@ async function performTarballUpdate(localVersion, latestTag) {
             message: `Successfully updated to version ${latestTag}`,
             localVersion: localVersion,
             latestVersion: latestTag,
+            targetVersion: latestTag,
             updated: true,
             updateMethod: 'tarball',
             needsRestart: needsRestart,
@@ -720,8 +722,9 @@ export async function handlePerformUpdate(req, res) {
     try {
         const body = await getRequestBody(req);
         const version = body?.version || null;
-        
-        const updateResult = await performUpdate(version);
+        const action = body?.action || 'update';
+
+        const updateResult = await performUpdate(version, action);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(updateResult));
         return true;
