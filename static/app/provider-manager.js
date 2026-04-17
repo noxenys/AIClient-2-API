@@ -3569,6 +3569,88 @@ function showRestartRequiredModal(version) {
     });
 }
 
+function getUpdateModeLabel(mode) {
+    const normalizedMode = String(mode || 'unknown').trim().toLowerCase();
+    return t(`dashboard.update.mode.${normalizedMode}`) || t('dashboard.update.mode.unknown');
+}
+
+function getUpdateModeHint(mode) {
+    const normalizedMode = String(mode || 'unknown').trim().toLowerCase();
+    return t(`dashboard.update.modeHint.${normalizedMode}`) || t('dashboard.update.modeHint.unknown');
+}
+
+function formatPublishedAt(publishedAt) {
+    if (!publishedAt) {
+        return '--';
+    }
+
+    const parsed = new Date(publishedAt);
+    if (Number.isNaN(parsed.getTime())) {
+        return publishedAt;
+    }
+
+    return parsed.toLocaleString(getCurrentLanguage());
+}
+
+function renderUpdateDetails(data = {}) {
+    const detailsPanel = document.getElementById('updateDetailsPanel');
+    const updateModeText = document.getElementById('updateModeText');
+    const updateRepoText = document.getElementById('updateRepoText');
+    const updateReleaseTitle = document.getElementById('updateReleaseTitle');
+    const updatePublishedAt = document.getElementById('updatePublishedAt');
+    const updateModeHint = document.getElementById('updateModeHint');
+    const updateReleaseNotes = document.getElementById('updateReleaseNotes');
+    const updateReleaseLink = document.getElementById('updateReleaseLink');
+
+    if (!detailsPanel) {
+        return;
+    }
+
+    const releaseInfo = data.releaseInfo || null;
+    const normalizedMode = String(data.updateMode || 'unknown').trim().toLowerCase();
+
+    if (updateModeText) {
+        updateModeText.textContent = getUpdateModeLabel(normalizedMode);
+        updateModeText.className = `info-value update-mode-badge update-mode-${normalizedMode || 'unknown'}`;
+    }
+
+    if (updateRepoText) {
+        const repo = data.updateRepo || '--';
+        updateRepoText.textContent = repo;
+        updateRepoText.title = repo;
+    }
+
+    if (updateReleaseTitle) {
+        const releaseTitle = releaseInfo?.title || data.latestVersion || '--';
+        updateReleaseTitle.textContent = releaseTitle;
+        updateReleaseTitle.title = releaseTitle;
+    }
+
+    if (updatePublishedAt) {
+        updatePublishedAt.textContent = formatPublishedAt(releaseInfo?.publishedAt);
+    }
+
+    if (updateModeHint) {
+        updateModeHint.textContent = getUpdateModeHint(normalizedMode);
+    }
+
+    if (updateReleaseNotes) {
+        updateReleaseNotes.textContent = releaseInfo?.notes || t('dashboard.update.notesEmpty');
+    }
+
+    if (updateReleaseLink) {
+        if (releaseInfo?.url) {
+            updateReleaseLink.href = releaseInfo.url;
+            updateReleaseLink.style.display = 'inline-flex';
+        } else {
+            updateReleaseLink.removeAttribute('href');
+            updateReleaseLink.style.display = 'none';
+        }
+    }
+
+    detailsPanel.style.display = 'flex';
+}
+
 /**
  * 检查更新
  * @param {boolean} silent - 是否静默检查（不显示 Toast）
@@ -3576,6 +3658,7 @@ function showRestartRequiredModal(version) {
 async function checkUpdate(silent = false) {
     const checkBtn = document.getElementById('checkUpdateBtn');
     const updateBtn = document.getElementById('performUpdateBtn');
+    const rollbackBtn = document.getElementById('rollbackUpdateBtn');
     const updateBadge = document.getElementById('updateBadge');
     const latestVersionText = document.getElementById('latestVersionText');
     const versionSelectWrapper = document.getElementById('versionSelectWrapper');
@@ -3623,7 +3706,15 @@ async function checkUpdate(silent = false) {
                     ? t('dashboard.update.performTitle')
                     : t('dashboard.update.redeployTitle');
             }
+
+            if (rollbackBtn) {
+                rollbackBtn.dataset.updateMode = data.updateMode || 'auto';
+                rollbackBtn.dataset.targetVersion = data.rollbackVersion || '';
+                rollbackBtn.style.display = data.hasRollbackTarget ? 'inline-flex' : 'none';
+            }
         }
+
+        renderUpdateDetails(data);
 
         if (data.hasUpdate) {
             if (updateBadge) updateBadge.style.display = 'inline-flex';
@@ -3643,6 +3734,10 @@ async function checkUpdate(silent = false) {
                 showToast(t('common.info'), t('dashboard.update.upToDate'), 'success');
             }
         }
+
+        if (rollbackBtn && !data.hasRollbackTarget) {
+            rollbackBtn.style.display = 'none';
+        }
     } catch (error) {
         console.error('Check update failed:', error);
         if (!silent) {
@@ -3658,45 +3753,54 @@ async function checkUpdate(silent = false) {
 }
 
 /**
- * 执行更新
+ * 执行版本动作
  */
-async function performUpdate() {
-    const updateBtn = document.getElementById('performUpdateBtn');
-    const versionSelect = document.getElementById('versionSelect');
-    const selectedVersion = versionSelect?.value || '';
-    const isRedeployMode = updateBtn?.dataset.updateMode === 'image';
+async function runVersionAction(targetVersion, actionType = 'update') {
+    const actionBtn = actionType === 'rollback'
+        ? document.getElementById('rollbackUpdateBtn')
+        : document.getElementById('performUpdateBtn');
+    const isRedeployMode = actionBtn?.dataset.updateMode === 'image';
 
-    const confirmMessage = isRedeployMode
-        ? t('dashboard.update.redeployConfirmMsg', { version: selectedVersion })
-        : t('dashboard.update.confirmMsg', { version: selectedVersion });
+    if (!targetVersion) {
+        showToast(t('common.warning'), t('dashboard.update.noRollbackTarget'), 'warning');
+        return;
+    }
+
+    const confirmMessage = actionType === 'rollback'
+        ? (isRedeployMode
+            ? t('dashboard.update.rollbackRedeployConfirmMsg', { version: targetVersion })
+            : t('dashboard.update.rollbackConfirmMsg', { version: targetVersion }))
+        : (isRedeployMode
+            ? t('dashboard.update.redeployConfirmMsg', { version: targetVersion })
+            : t('dashboard.update.confirmMsg', { version: targetVersion }));
 
     if (!confirm(confirmMessage)) {
         return;
     }
 
-    const updateBtnIcon = updateBtn?.querySelector('i');
-    const updateBtnText = updateBtn?.querySelector('span');
+    const actionBtnIcon = actionBtn?.querySelector('i');
+    const actionBtnText = actionBtn?.querySelector('span');
 
     try {
-        if (updateBtn) {
-            updateBtn.disabled = true;
-            if (updateBtnIcon) updateBtnIcon.className = 'fas fa-spinner fa-spin';
-            if (updateBtnText) updateBtnText.textContent = t('dashboard.update.updating');
+        if (actionBtn) {
+            actionBtn.disabled = true;
+            if (actionBtnIcon) actionBtnIcon.className = 'fas fa-spinner fa-spin';
+            if (actionBtnText) actionBtnText.textContent = t('dashboard.update.updating');
         }
 
         showToast(t('common.info'), t('dashboard.update.updating'), 'info');
 
-        const data = await window.apiClient.post('/update', { version: selectedVersion });
+        const data = await window.apiClient.post('/update', { version: targetVersion });
 
         if (data.success) {
             if (data.updated) {
                 // 代码已更新，直接调用重启服务
-                showToast(t('common.success'), t('dashboard.update.success'), 'success');
+                showToast(t('common.success'), data.message || t('dashboard.update.success'), 'success');
                 
                 // 自动重启服务
                 await restartServiceAfterUpdate();
             } else if (data.deploymentRequired) {
-                showToast(t('common.info'), data.message || t('dashboard.update.redeployHint', { version: selectedVersion }), 'info');
+                showToast(t('common.info'), data.message || t('dashboard.update.redeployHint', { version: targetVersion }), 'info');
             } else {
                 // 已是目标版本
                 showToast(t('common.info'), data.message || t('dashboard.update.upToDate'), 'info');
@@ -3706,16 +3810,40 @@ async function performUpdate() {
         console.error('Update failed:', error);
         showToast(t('common.error'), t('dashboard.update.failed', { error: error.message }), 'error');
     } finally {
-        if (updateBtn) {
-            updateBtn.disabled = false;
-            if (updateBtnIcon) updateBtnIcon.className = 'fas fa-download';
-            if (updateBtnText) {
-                updateBtnText.textContent = isRedeployMode
-                    ? t('dashboard.update.redeploy')
-                    : t('dashboard.update.perform');
+        if (actionBtn) {
+            actionBtn.disabled = false;
+            if (actionBtnIcon) {
+                actionBtnIcon.className = actionType === 'rollback'
+                    ? 'fas fa-rotate-left'
+                    : 'fas fa-download';
+            }
+            if (actionBtnText) {
+                actionBtnText.textContent = actionType === 'rollback'
+                    ? t('dashboard.update.rollback')
+                    : (isRedeployMode
+                        ? t('dashboard.update.redeploy')
+                        : t('dashboard.update.perform'));
             }
         }
     }
+}
+
+/**
+ * 执行更新
+ */
+async function performUpdate() {
+    const versionSelect = document.getElementById('versionSelect');
+    const selectedVersion = versionSelect?.value || '';
+    return runVersionAction(selectedVersion, 'update');
+}
+
+/**
+ * 回滚到上一版
+ */
+async function rollbackUpdate() {
+    const rollbackBtn = document.getElementById('rollbackUpdateBtn');
+    const rollbackVersion = rollbackBtn?.dataset.targetVersion || '';
+    return runVersionAction(rollbackVersion, 'rollback');
 }
 
 function renderProviderStatusOverviewSummary(summaries, configMap, sortedProviderTypes) {
@@ -3988,5 +4116,6 @@ export {
     handleGenerateAuthUrl,
     checkUpdate,
     performUpdate,
+    rollbackUpdate,
     showAddProviderGroupModal
 };

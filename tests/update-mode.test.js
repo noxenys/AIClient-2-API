@@ -1,6 +1,7 @@
 import {
     canPerformSelfUpdate,
     compareVersions,
+    findRollbackVersion,
     normalizeUpdateMode,
     resolveEffectiveUpdateMode,
     sortAndFilterVersions
@@ -35,5 +36,14 @@ describe('update mode helpers', () => {
             'v2.14.6',
             'v2.14.5.2'
         ]);
+    });
+
+    test('finds rollback version from the next lower tag', () => {
+        expect(findRollbackVersion(['2.14.13', '2.14.12', '2.14.11'], '2.14.12')).toBe('2.14.11');
+        expect(findRollbackVersion(['v2.14.13', '2.14.11'], '2.14.12')).toBe('2.14.11');
+    });
+
+    test('returns null when no lower rollback version exists', () => {
+        expect(findRollbackVersion(['2.14.13', '2.14.12'], '2.14.11')).toBeNull();
     });
 });

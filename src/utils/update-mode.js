@@ -44,3 +44,17 @@ export function sortAndFilterVersions(versions = [], limit = 10) {
         .sort((a, b) => compareVersions(b, a))
         .slice(0, limit);
 }
+
+export function findRollbackVersion(versions = [], currentVersion = '') {
+    const sortedVersions = sortAndFilterVersions(versions, Array.isArray(versions) ? versions.length : 10);
+    if (sortedVersions.length === 0) {
+        return null;
+    }
+
+    const currentVersionIndex = sortedVersions.findIndex(version => compareVersions(version, currentVersion) === 0);
+    if (currentVersionIndex >= 0) {
+        return sortedVersions[currentVersionIndex + 1] || null;
+    }
+
+    return sortedVersions.find(version => compareVersions(version, currentVersion) < 0) || null;
+}

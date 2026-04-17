@@ -3,7 +3,7 @@
 import { elements, autoScroll, setAutoScroll, clearLogs } from './constants.js';
 import { showToast } from './utils.js';
 import { t } from './i18n.js';
-import { checkUpdate, performUpdate, loadProviders, renderCachedProviderViews } from './provider-manager.js';
+import { checkUpdate, performUpdate, rollbackUpdate, loadProviders, renderCachedProviderViews } from './provider-manager.js';
 import { createDebouncedTask } from './performance-utils.js';
 
 const debouncedProviderSearchRender = createDebouncedTask(() => {
@@ -211,6 +211,11 @@ function initEventListeners() {
     const performUpdateBtn = document.getElementById('performUpdateBtn');
     if (performUpdateBtn) {
         performUpdateBtn.addEventListener('click', performUpdate);
+    }
+
+    const rollbackUpdateBtn = document.getElementById('rollbackUpdateBtn');
+    if (rollbackUpdateBtn) {
+        rollbackUpdateBtn.addEventListener('click', rollbackUpdate);
     }
 
     // 刷新提供商状态按钮

@@ -493,6 +493,10 @@
         justify-content: flex-start;
     }
 
+    .update-controls > * {
+        flex-shrink: 0;
+    }
+
     .info-grid {
         grid-template-columns: repeat(2, 1fr) !important;
         gap: 0.75rem;
@@ -533,6 +537,35 @@
         font-size: 0.625rem;
         padding: 0.125rem 0.5rem;
         margin-left: 0.5rem;
+    }
+
+    .update-details-grid {
+        grid-template-columns: 1fr !important;
+        gap: 0.75rem;
+    }
+
+    .update-detail-item,
+    .update-release-card {
+        padding: 0.875rem;
+    }
+
+    .update-release-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .update-release-header .btn {
+        width: 100%;
+        justify-content: center;
+    }
+
+    .update-release-notes {
+        max-height: 180px;
+        font-size: 0.875rem;
+    }
+
+    .update-mode-badge {
+        font-size: 0.75rem;
     }
 
     /* 提供商列表 */

@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import { CONFIG } from '../core/config-manager.js';
 import { parseProxyUrl } from '../utils/proxy-utils.js';
 import { getRequestBody } from '../utils/common.js';
-import { canPerformSelfUpdate, compareVersions, normalizeUpdateMode, resolveEffectiveUpdateMode, sortAndFilterVersions } from '../utils/update-mode.js';
+import { canPerformSelfUpdate, compareVersions, findRollbackVersion, normalizeUpdateMode, resolveEffectiveUpdateMode, sortAndFilterVersions } from '../utils/update-mode.js';
 
 const execAsync = promisify(exec);
 const DEFAULT_GITHUB_REPO = 'noxenys/AIClient-2-API';
@@ -21,28 +21,28 @@ function getConfiguredUpdateMode() {
     return normalizeUpdateMode(CONFIG?.UPDATE_MODE || process.env.UPDATE_MODE || 'auto');
 }
 
-function buildGitHubApiCandidates(repo) {
-    const apiPath = `repos/${repo}/tags`;
+function buildGitHubApiCandidates(repo, apiPath = 'tags') {
+    const resolvedApiPath = `repos/${repo}/${apiPath}`;
     return [
         {
             name: 'gh-proxy.org',
-            url: `https://gh-proxy.org/https://api.github.com/${apiPath}`
+            url: `https://gh-proxy.org/https://api.github.com/${resolvedApiPath}`
         },
         {
             name: 'hk.gh-proxy.org',
-            url: `https://hk.gh-proxy.org/https://api.github.com/${apiPath}`
+            url: `https://hk.gh-proxy.org/https://api.github.com/${resolvedApiPath}`
         },
         {
             name: 'cdn.gh-proxy.org',
-            url: `https://cdn.gh-proxy.org/https://api.github.com/${apiPath}`
+            url: `https://cdn.gh-proxy.org/https://api.github.com/${resolvedApiPath}`
         },
-                {
+        {
             name: 'edgeone.gh-proxy.org',
-            url: `https://edgeone.gh-proxy.org/https://api.github.com/${apiPath}`
+            url: `https://edgeone.gh-proxy.org/https://api.github.com/${resolvedApiPath}`
         },
         {
             name: 'github-direct',
-            url: `https://api.github.com/${apiPath}`
+            url: `https://api.github.com/${resolvedApiPath}`
         }
     ];
 }
@@ -139,7 +139,7 @@ async function fetchWithProxy(url, options = {}) {
  */
 async function getVersionsFromGitHub(limit = 10) {
     const repo = getUpdateRepo();
-    const candidates = buildGitHubApiCandidates(repo);
+    const candidates = buildGitHubApiCandidates(repo, 'tags');
     
     for (const candidate of candidates) {
         try {
@@ -187,6 +187,67 @@ async function getLatestVersionFromGitHub() {
     return versions.length > 0 ? versions[0] : null;
 }
 
+function normalizeReleaseInfo(release, fallbackTag = null) {
+    if (!release || typeof release !== 'object') {
+        return null;
+    }
+
+    const tag = String(release.tag_name || fallbackTag || '').trim();
+    if (!tag) {
+        return null;
+    }
+
+    const title = String(release.name || tag).trim() || tag;
+    const notes = typeof release.body === 'string' ? release.body.trim() : '';
+    const url = String(release.html_url || '').trim();
+    const publishedAt = String(release.published_at || '').trim();
+
+    return {
+        tag,
+        title,
+        notes,
+        url,
+        publishedAt,
+        isPrerelease: Boolean(release.prerelease),
+        isDraft: Boolean(release.draft)
+    };
+}
+
+async function getLatestReleaseFromGitHub(targetTag = null) {
+    const repo = getUpdateRepo();
+    const candidates = buildGitHubApiCandidates(repo, 'releases/latest');
+
+    for (const candidate of candidates) {
+        try {
+            logger.info(`[Update] Fetching latest release via ${candidate.name}...`);
+            const response = await fetchWithProxy(candidate.url, {
+                headers: {
+                    'Accept': 'application/vnd.github.v3+json',
+                    'User-Agent': 'AIClient2API-UpdateChecker'
+                },
+                timeout: 10000
+            });
+
+            if (!response.ok) {
+                throw new Error(`GitHub Releases API returned ${response.status}: ${response.statusText}`);
+            }
+
+            const release = await response.json();
+            const releaseInfo = normalizeReleaseInfo(release, targetTag);
+            if (!releaseInfo) {
+                logger.warn(`[Update] Invalid release payload via ${candidate.name}`);
+                continue;
+            }
+
+            return releaseInfo;
+        } catch (error) {
+            logger.warn(`[Update] Failed to fetch latest release via ${candidate.name}: ${error.message}`);
+        }
+    }
+
+    return null;
+}
+
 /**
  * 检查是否有新版本可用
  * 支持两种模式：
@@ -196,6 +257,7 @@ async function getLatestVersionFromGitHub() {
  */
 export async function checkForUpdates() {
     const versionFilePath = path.join(process.cwd(), 'VERSION');
+    const updateRepo = getUpdateRepo();
     
     // 读取本地版本
     let localVersion = 'unknown';
@@ -275,6 +337,10 @@ export async function checkForUpdates() {
             updateMode: effectiveUpdateMode,
             configuredUpdateMode,
             canSelfUpdate,
+            updateRepo,
+            rollbackVersion: null,
+            hasRollbackTarget: false,
+            releaseInfo: null,
             error: 'Unable to get latest version information'
         };
     }
@@ -282,6 +348,8 @@ export async function checkForUpdates() {
     // 比较版本
     const comparison = compareVersions(latestTag, localVersion);
     const hasUpdate = comparison > 0;
+    const rollbackVersion = findRollbackVersion(availableVersions, localVersion);
+    const releaseInfo = await getLatestReleaseFromGitHub(latestTag);
     
     logger.info(`[Update] Local version: ${localVersion}, Latest version: ${latestTag}, Has update: ${hasUpdate}, Method: ${updateMethod}`);
     
@@ -294,6 +362,10 @@ export async function checkForUpdates() {
         updateMode: effectiveUpdateMode,
         configuredUpdateMode,
         canSelfUpdate,
+        updateRepo,
+        rollbackVersion,
+        hasRollbackTarget: Boolean(rollbackVersion),
+        releaseInfo,
         error: null
     };
 }

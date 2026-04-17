@@ -52,6 +52,9 @@
                 <button id="performUpdateBtn" class="btn btn-primary btn-sm" style="display: none;" data-i18n-title="dashboard.update.performTitle" title="执行更新">
                     <i class="fas fa-download"></i> <span data-i18n="dashboard.update.perform">立即更新</span>
                 </button>
+                <button id="rollbackUpdateBtn" class="btn btn-outline btn-sm" style="display: none;" data-i18n-title="dashboard.update.rollbackTitle" title="回滚上一版">
+                    <i class="fas fa-rotate-left"></i> <span data-i18n="dashboard.update.rollback">回滚上一版</span>
+                </button>
             </div>
         </div>
         <div class="info-grid">
@@ -121,6 +124,54 @@
                 <div class="version-display-wrapper">
                 <span class="info-value" id="processPid">--</span>
                 </div>
+            </div>
+        </div>
+        <div class="update-details-panel" id="updateDetailsPanel" style="display: none;">
+            <div class="update-details-grid">
+                <div class="update-detail-item">
+                    <span class="info-label">
+                        <i class="fas fa-layer-group"></i> <span data-i18n="dashboard.update.mode">更新模式</span>
+                    </span>
+                    <div class="version-display-wrapper">
+                        <span class="info-value update-mode-badge" id="updateModeText">--</span>
+                    </div>
+                </div>
+                <div class="update-detail-item">
+                    <span class="info-label">
+                        <i class="fab fa-github"></i> <span data-i18n="dashboard.update.repo">更新源</span>
+                    </span>
+                    <div class="version-display-wrapper">
+                        <span class="info-value update-text-ellipsis" id="updateRepoText">--</span>
+                    </div>
+                </div>
+                <div class="update-detail-item">
+                    <span class="info-label">
+                        <i class="fas fa-box-open"></i> <span data-i18n="dashboard.update.release">最新发布</span>
+                    </span>
+                    <div class="version-display-wrapper">
+                        <span class="info-value update-text-ellipsis" id="updateReleaseTitle">--</span>
+                    </div>
+                </div>
+                <div class="update-detail-item">
+                    <span class="info-label">
+                        <i class="fas fa-calendar-alt"></i> <span data-i18n="dashboard.update.publishedAt">发布时间</span>
+                    </span>
+                    <div class="version-display-wrapper">
+                        <span class="info-value update-text-ellipsis" id="updatePublishedAt">--</span>
+                    </div>
+                </div>
+            </div>
+            <div class="update-release-card">
+                <div class="update-release-header">
+                    <span class="info-label">
+                        <i class="fas fa-file-lines"></i> <span data-i18n="dashboard.update.notes">发布说明</span>
+                    </span>
+                    <a id="updateReleaseLink" class="btn btn-outline btn-sm" style="display: none;" target="_blank" rel="noopener noreferrer">
+                        <i class="fas fa-arrow-up-right-from-square"></i> <span data-i18n="dashboard.update.openRelease">查看发布页</span>
+                    </a>
+                </div>
+                <p class="update-mode-hint" id="updateModeHint">--</p>
+                <pre class="update-release-notes" id="updateReleaseNotes">--</pre>
             </div>
         </div>
     </div>
