@@ -14,6 +14,69 @@ const SOURCE_PRIORITY = {
     custom: 3
 };
 
+const DISPLAY_TOKEN_MAP = {
+    gpt: 'GPT',
+    grok: 'Grok',
+    gemini: 'Gemini',
+    claude: 'Claude',
+    codex: 'Codex',
+    qwen: 'Qwen',
+    kimi: 'Kimi',
+    glm: 'GLM',
+    iflow: 'iFlow',
+    deepseek: 'DeepSeek',
+    minimax: 'MiniMax',
+    auto: 'Auto',
+    fast: 'Fast',
+    heavy: 'Heavy',
+    expert: 'Expert',
+    mini: 'Mini',
+    flash: 'Flash',
+    lite: 'Lite',
+    thinking: 'Thinking',
+    imagine: 'Imagine',
+    image: 'Image',
+    edit: 'Edit',
+    responses: 'Responses',
+    oauth: 'OAuth'
+};
+
+const DISPLAY_HYPHEN_PREFIXES = new Set(['gpt', 'glm']);
+
+export function formatModelDisplayName(modelId = '') {
+    const normalizedId = String(modelId || '').trim();
+    if (!normalizedId) {
+        return '';
+    }
+
+    const rawTokens = normalizedId.split('-').filter(Boolean);
+    const formattedTokens = rawTokens.map(token => {
+            if (DISPLAY_TOKEN_MAP[token]) {
+                return DISPLAY_TOKEN_MAP[token];
+            }
+
+            if (/^\d+(\.\d+)*$/.test(token)) {
+                return token;
+            }
+
+            if (/^[a-z]\d+$/i.test(token)) {
+                return token.charAt(0).toUpperCase() + token.slice(1);
+            }
+
+            return token.charAt(0).toUpperCase() + token.slice(1);
+        });
+
+    if (
+        rawTokens.length >= 2 &&
+        DISPLAY_HYPHEN_PREFIXES.has(rawTokens[0]) &&
+        /^\d+(\.\d+)*$/.test(rawTokens[1])
+    ) {
+        formattedTokens.splice(0, 2, `${formattedTokens[0]}-${formattedTokens[1]}`);
+    }
+
+    return formattedTokens.join(' ');
+}
+
 function resolveBuiltinModels(providerType, builtinProviderModels = PROVIDER_MODELS) {
     if (builtinProviderModels[providerType]) {
         return normalizeModelIds(builtinProviderModels[providerType]);
@@ -59,6 +122,7 @@ function addContribution(registryMap, modelId, {
     providerType,
     listProviderType = null,
     aliases = [],
+    displayName = '',
     actualProvider = '',
     actualModel = ''
 }) {
@@ -73,7 +137,7 @@ function addContribution(registryMap, modelId, {
 
     const entry = registryMap.get(normalizedId) || {
         id: normalizedId,
-        displayName: normalizedId,
+        displayName: formatModelDisplayName(normalizedId),
         aliases: [],
         providerTypes: [],
         listProviderTypes: [],
@@ -90,6 +154,11 @@ function addContribution(registryMap, modelId, {
     }
     entry.sources = sortUnique([...entry.sources, source]);
     entry.primarySource = getPrimarySource(entry.sources);
+    if (displayName && source === 'custom') {
+        entry.displayName = displayName;
+    } else if (!entry.displayName) {
+        entry.displayName = formatModelDisplayName(normalizedId);
+    }
 
     if (source === 'custom') {
         entry.actualProvider = actualProvider || entry.actualProvider || '';
@@ -189,6 +258,7 @@ export function buildModelRegistry({
                 providerType,
                 listProviderType: providerType,
                 aliases: model.alias,
+                displayName: model.name,
                 actualProvider: getCustomModelActualProvider(model),
                 actualModel: model.actualModel || model.id
             });

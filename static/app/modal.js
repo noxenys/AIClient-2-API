@@ -2,7 +2,8 @@
 
 import { escapeHtml, showToast, getFieldLabel, getProviderTypeFields } from './utils.js';
 import { handleProviderPasswordToggle } from './event-handlers.js';
-import { t } from './i18n.js';
+import { t, getCurrentLanguage } from './i18n.js';
+import { getProviderRuntimeMetaItems, getProviderRuntimeState } from './provider-state-display.js';
 
 const MANAGED_MODEL_LIST_PROVIDERS = new Set([
     'openai-custom',
@@ -21,16 +22,112 @@ let nodeSearchTerm = '';
 let currentTotalCount = 0;
 let currentHealthyCount = 0;
 let currentUnhealthyCount = 0;
+let currentSelectableCount = 0;
+let currentBusyCount = 0;
 let currentFilteredCount = 0;
 let currentTotalPages = 1;
+let currentProviderSummary = {};
+let currentProviderFilters = getDefaultProviderFilters();
 let providerFetchSequence = 0;
 let nodeSearchDebounceTimer = null;
 let currentViewMode = localStorage.getItem('providerViewMode') || 'list';
+
+function translateOrFallback(key, fallback, params = {}) {
+    const translated = t(key, params);
+    return translated === key ? fallback : translated;
+}
 
 function usesManagedModelList(providerType = '') {
     return Array.from(MANAGED_MODEL_LIST_PROVIDERS).some(baseType =>
         providerType === baseType || providerType.startsWith(`${baseType}-`)
     );
+}
+
+function getDefaultProviderFilters() {
+    return {
+        state: '',
+        recentFailureType: '',
+        selectable: '',
+        abnormal: '',
+        needsRefresh: '',
+        sortBy: 'schedulerRank',
+        sortOrder: 'asc'
+    };
+}
+
+function normalizeFilterValue(value) {
+    if (Array.isArray(value)) {
+        return value.filter(Boolean).join(',');
+    }
+
+    if (value === null || value === undefined) {
+        return '';
+    }
+
+    if (value === true || value === false) {
+        return String(value);
+    }
+
+    return String(value).trim();
+}
+
+function normalizeProviderFilters(filters = {}) {
+    const defaults = getDefaultProviderFilters();
+    return {
+        state: normalizeFilterValue(filters.state ?? defaults.state),
+        recentFailureType: normalizeFilterValue(filters.recentFailureType ?? defaults.recentFailureType),
+        selectable: normalizeFilterValue(filters.selectable ?? defaults.selectable),
+        abnormal: normalizeFilterValue(filters.abnormal ?? defaults.abnormal),
+        needsRefresh: normalizeFilterValue(filters.needsRefresh ?? defaults.needsRefresh),
+        sortBy: normalizeFilterValue(filters.sortBy ?? defaults.sortBy) || defaults.sortBy,
+        sortOrder: normalizeFilterValue(filters.sortOrder ?? defaults.sortOrder) === 'desc' ? 'desc' : 'asc'
+    };
+}
+
+function formatDurationText(value) {
+    const duration = Number(value);
+    if (!Number.isFinite(duration) || duration < 0) {
+        return '-';
+    }
+
+    if (duration < 1000) {
+        return `${duration} ms`;
+    }
+
+    const totalSeconds = Math.round(duration / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts = [];
+
+    if (hours > 0) {
+        parts.push(`${hours}h`);
+    }
+    if (minutes > 0) {
+        parts.push(`${minutes}m`);
+    }
+    if (seconds > 0 || parts.length === 0) {
+        parts.push(`${seconds}s`);
+    }
+
+    return parts.join(' ');
+}
+
+function buildCurrentSelector() {
+    return {
+        filters: {
+            search: nodeSearchTerm.trim(),
+            state: currentProviderFilters.state,
+            recentFailureType: currentProviderFilters.recentFailureType,
+            selectable: currentProviderFilters.selectable,
+            abnormal: currentProviderFilters.abnormal,
+            needsRefresh: currentProviderFilters.needsRefresh
+        },
+        sortOptions: {
+            sortBy: currentProviderFilters.sortBy,
+            sortOrder: currentProviderFilters.sortOrder
+        }
+    };
 }
 
 function normalizeModelList(models = []) {
@@ -68,6 +165,28 @@ function buildProviderPageUrl(providerType, page = 1, searchTerm = '') {
         params.set('search', searchTerm.trim());
     }
 
+    if (currentProviderFilters.state) {
+        params.set('state', currentProviderFilters.state);
+    }
+    if (currentProviderFilters.recentFailureType) {
+        params.set('recentFailureType', currentProviderFilters.recentFailureType);
+    }
+    if (currentProviderFilters.selectable) {
+        params.set('selectable', currentProviderFilters.selectable);
+    }
+    if (currentProviderFilters.abnormal) {
+        params.set('abnormal', currentProviderFilters.abnormal);
+    }
+    if (currentProviderFilters.needsRefresh) {
+        params.set('needsRefresh', currentProviderFilters.needsRefresh);
+    }
+    if (currentProviderFilters.sortBy) {
+        params.set('sortBy', currentProviderFilters.sortBy);
+    }
+    if (currentProviderFilters.sortOrder) {
+        params.set('sortOrder', currentProviderFilters.sortOrder);
+    }
+
     return `/providers/${encodeURIComponent(providerType)}?${params.toString()}`;
 }
 
@@ -78,9 +197,18 @@ function applyProviderPageData(data, fallbackSearchTerm = '') {
     currentTotalCount = data.totalCount ?? currentProviders.length;
     currentHealthyCount = data.healthyCount ?? currentProviders.filter(provider => provider.isHealthy).length;
     currentUnhealthyCount = data.unhealthyCount ?? Math.max(0, currentTotalCount - currentHealthyCount);
+    currentSelectableCount = data.selectableCount ?? data.summary?.selectableCount ?? currentSelectableCount;
+    currentBusyCount = data.busyCount ?? data.summary?.busyCount ?? currentBusyCount;
     currentFilteredCount = data.filteredCount ?? currentProviders.length;
     currentTotalPages = data.totalPages ?? Math.max(1, Math.ceil(currentFilteredCount / PROVIDERS_PER_PAGE));
+    currentProviderSummary = data.summary || currentProviderSummary || {};
     nodeSearchTerm = typeof data.search === 'string' ? data.search : fallbackSearchTerm;
+    currentProviderFilters = normalizeProviderFilters({
+        ...currentProviderFilters,
+        ...(data.filters || {}),
+        sortBy: data.sortBy || currentProviderFilters.sortBy,
+        sortOrder: data.sortOrder || currentProviderFilters.sortOrder
+    });
 }
 
 async function fetchProviderPage(providerType, page = 1, searchTerm = nodeSearchTerm) {
@@ -429,6 +557,60 @@ async function openSupportedModelsPicker(providerType, uuid, event) {
     }
 }
 
+function formatProviderDateTime(value) {
+    if (!value) {
+        return '-';
+    }
+
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString(getCurrentLanguage()) : String(value);
+}
+
+function renderProviderSummaryPanel() {
+    const summary = currentProviderSummary || {};
+    const nextRecovery = summary.nextCooldownUntil ? formatProviderDateTime(summary.nextCooldownUntil) : '-';
+    const topCandidate = summary.topCandidateUuid || '-';
+
+    return `
+        <div class="provider-summary-grid">
+            <div class="provider-summary-item">
+                <span class="label">${translateOrFallback('modal.provider.totalAccounts', '总节点数')}</span>
+                <span class="value">${currentTotalCount}</span>
+            </div>
+            <div class="provider-summary-item">
+                <span class="label">${translateOrFallback('modal.provider.healthyAccounts', '健康节点')}</span>
+                <span class="value">${currentHealthyCount}</span>
+            </div>
+            <div class="provider-summary-item">
+                <span class="label">${translateOrFallback('modal.provider.selectableAccounts', '可选节点')}</span>
+                <span class="value">${currentSelectableCount}</span>
+            </div>
+            <div class="provider-summary-item">
+                <span class="label">${translateOrFallback('modal.provider.busyAccounts', '繁忙节点')}</span>
+                <span class="value">${currentBusyCount}</span>
+            </div>
+        </div>
+        <div class="provider-summary-meta">
+            <span class="provider-summary-chip">
+                <i class="fas fa-user-shield"></i>
+                401/403: ${summary.authFailureCount || 0}
+            </span>
+            <span class="provider-summary-chip">
+                <i class="fas fa-gauge-high"></i>
+                429: ${summary.rateLimitFailureCount || 0}
+            </span>
+            <span class="provider-summary-chip">
+                <i class="fas fa-ranking-star"></i>
+                首选节点: ${escapeHtml(topCandidate)}
+            </span>
+            <span class="provider-summary-chip">
+                <i class="fas fa-hourglass-half"></i>
+                下次恢复: ${escapeHtml(nextRecovery)}
+            </span>
+        </div>
+    `;
+}
+
 /**
  * 显示提供商管理模态框
  * @param {Object} data - 提供商数据
@@ -436,7 +618,12 @@ async function openSupportedModelsPicker(providerType, uuid, event) {
  */
 function showProviderManagerModal(data, initialSearchTerm = '') {
     const { providerType } = data;
-    
+
+    currentProviderFilters = getDefaultProviderFilters();
+    currentProviderSummary = {};
+    currentSelectableCount = 0;
+    currentBusyCount = 0;
+
     // 保存当前数据用于分页
     applyProviderPageData(data, initialSearchTerm);
     cachedModels = [];
@@ -465,13 +652,8 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
             </div>
             <div class="provider-modal-body">
                 <div class="provider-summary">
-                    <div class="provider-summary-item">
-                        <span class="label" data-i18n="modal.provider.totalAccounts">总账户数:</span>
-                        <span class="value">${currentTotalCount}</span>
-                    </div>
-                    <div class="provider-summary-item">
-                        <span class="label" data-i18n="modal.provider.healthyAccounts">健康账户:</span>
-                        <span class="value">${currentHealthyCount}</span>
+                    <div class="provider-summary-main" id="providerSummaryPanel">
+                        ${renderProviderSummaryPanel()}
                     </div>
                     <div class="provider-summary-actions">
                         <button class="btn btn-success" onclick="window.showAddProviderForm('${providerType}')">
@@ -492,13 +674,83 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
                     </div>
                 </div>
 
-                <div class="provider-nodes-toolbar" style="margin-bottom: 15px; display: flex; gap: 10px; align-items: center;">
+                <div class="provider-batch-toolbar">
+                    <button class="btn btn-secondary" onclick="window.exportFilteredProviders('${providerType}')">
+                        <i class="fas fa-file-export"></i> 导出当前筛选
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.showBatchImportProvidersDialog('${providerType}')">
+                        <i class="fas fa-file-import"></i> 批量导入
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.dedupeProviderNodes('${providerType}')">
+                        <i class="fas fa-filter-circle-xmark"></i> 去重
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.runFilteredBatchAction('${providerType}', 'enable')">
+                        <i class="fas fa-play"></i> 批量启用
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.runFilteredBatchAction('${providerType}', 'disable')">
+                        <i class="fas fa-ban"></i> 批量禁用
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.runFilteredBatchAction('${providerType}', 'refresh-status')">
+                        <i class="fas fa-heart-pulse"></i> 批量刷新状态
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.showBatchUpdateModelsDialog('${providerType}')">
+                        <i class="fas fa-cubes"></i> 批量改模型
+                    </button>
+                </div>
+
+                <div class="provider-nodes-toolbar">
                     <div class="search-input-wrapper" style="position: relative; flex: 1;">
                         <i class="fas fa-search" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-tertiary);"></i>
                         <input type="text" id="nodeSearchInput" 
                                value="${escapeHtml(nodeSearchTerm)}"
                                placeholder="${t('modal.provider.searchNodesPlaceholder') || '搜索节点名称、UUID 或配置内容...'}" 
                                style="width: 100%; padding: 10px 12px 10px 35px; border-radius: 8px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary);">
+                    </div>
+                    <div class="provider-filter-group">
+                        <select id="providerStateFilter" class="provider-toolbar-select">
+                            <option value="">全部状态</option>
+                            <option value="healthy">healthy</option>
+                            <option value="cooldown">cooldown</option>
+                            <option value="risky">risky</option>
+                            <option value="banned">banned</option>
+                            <option value="disabled">disabled</option>
+                        </select>
+                        <select id="providerFailureFilter" class="provider-toolbar-select">
+                            <option value="">全部故障</option>
+                            <option value="auth">auth</option>
+                            <option value="rate_limit">rate_limit</option>
+                            <option value="quota">quota</option>
+                            <option value="network">network</option>
+                        </select>
+                        <select id="providerSelectableFilter" class="provider-toolbar-select">
+                            <option value="">全部可选性</option>
+                            <option value="true">只看可选</option>
+                            <option value="false">只看被跳过</option>
+                        </select>
+                        <select id="providerAbnormalFilter" class="provider-toolbar-select">
+                            <option value="">全部节点</option>
+                            <option value="true">只看异常</option>
+                            <option value="false">只看正常</option>
+                        </select>
+                        <select id="providerNeedsRefreshFilter" class="provider-toolbar-select">
+                            <option value="">全部刷新状态</option>
+                            <option value="true">待刷新</option>
+                            <option value="false">无需刷新</option>
+                        </select>
+                        <select id="providerSortBy" class="provider-toolbar-select">
+                            <option value="schedulerRank">按调度排名</option>
+                            <option value="schedulerScore">按调度分</option>
+                            <option value="stateScore">按状态分</option>
+                            <option value="cooldownRemainingMs">按冷却剩余</option>
+                            <option value="recentHttpStatus">按最近 HTTP</option>
+                            <option value="errorCount">按错误数</option>
+                            <option value="usageCount">按使用量</option>
+                            <option value="selectableRank">按可选排名</option>
+                        </select>
+                        <select id="providerSortOrder" class="provider-toolbar-select">
+                            <option value="asc">升序</option>
+                            <option value="desc">降序</option>
+                        </select>
                     </div>
                     <div class="view-mode-toggle" style="display: flex; background: var(--bg-secondary); padding: 4px; border-radius: 8px; border: 1px solid var(--border-color);">
                         <button class="view-mode-btn ${currentViewMode === 'list' ? 'active' : ''}" data-mode="list" title="${t('common.view.list') || '列表视图'}" style="border: none; background: ${currentViewMode === 'list' ? 'var(--primary-color)' : 'transparent'}; color: ${currentViewMode === 'list' ? '#fff' : 'var(--text-secondary)'}; padding: 6px 10px; border-radius: 6px; cursor: pointer; transition: all 0.2s;">
@@ -527,30 +779,46 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
     renderCurrentProviderPage();
 }
 
-function getProviderRuntimeState(provider = {}) {
-    if (provider.state) return provider.state;
-    if (provider.isDisabled) return 'disabled';
-    if (provider.isHealthy) return 'healthy';
-    return 'risky';
-}
-
 function renderProviderRuntimeState(provider = {}) {
     const state = getProviderRuntimeState(provider);
     const stateLabel = t(`modal.provider.runtimeState.${state}`) || state;
-    const cooldownText = state === 'cooldown' && provider.cooldownUntil
-        ? ` | <span><i class="fas fa-hourglass-half"></i> ${t('modal.provider.cooldownUntil')}: ${new Date(provider.cooldownUntil).toLocaleString()}</span>`
-        : '';
-    const reasonText = provider.lastStateReason
-        ? ` | <span><i class="fas fa-circle-info"></i> ${t('modal.provider.runtimeReason')}: ${escapeHtml(provider.lastStateReason)}</span>`
+    const metaItems = getProviderRuntimeMetaItems(provider, {
+        t,
+        formatDateTime: formatProviderDateTime,
+        formatDuration: formatDurationText
+    });
+
+    const badgeHtml = [
+        provider.isSelectionCandidate
+            ? `<span class="provider-state-badge provider-state-candidate"><i class="fas fa-check"></i> 可参与调度</span>`
+            : `<span class="provider-state-badge provider-state-skipped"><i class="fas fa-forward"></i> 本轮跳过</span>`,
+        provider.isPrimaryCandidate
+            ? `<span class="provider-state-badge provider-state-primary"><i class="fas fa-crown"></i> 当前首选</span>`
+            : ''
+    ].filter(Boolean).join('');
+
+    const metaHtml = metaItems.length > 0
+        ? `
+            <div class="provider-runtime-grid">
+                ${metaItems.map(item => `
+                    <div class="provider-runtime-chip provider-runtime-chip-${escapeHtml(item.key)}">
+                        <span class="runtime-label">${escapeHtml(item.label)}</span>
+                        <span class="runtime-value">${escapeHtml(item.value)}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `
         : '';
 
     return `
-        <div class="provider-state-meta">
+        <div class="provider-state-meta is-${escapeHtml(state)}">
             <span class="provider-state-badge provider-state-${state}">
                 <i class="fas fa-signal"></i>
                 ${escapeHtml(stateLabel)}
-            </span>${cooldownText}${reasonText}
+            </span>
+            ${badgeHtml}
         </div>
+        ${metaHtml}
     `;
 }
 
@@ -560,12 +828,31 @@ function renderCurrentProviderPage() {
         return;
     }
 
-    const summaryValues = modal.querySelectorAll('.provider-summary-item .value');
-    if (summaryValues[0]) {
-        summaryValues[0].textContent = currentTotalCount;
+    const summaryPanel = modal.querySelector('#providerSummaryPanel');
+    if (summaryPanel) {
+        summaryPanel.innerHTML = renderProviderSummaryPanel();
     }
-    if (summaryValues[1]) {
-        summaryValues[1].textContent = currentHealthyCount;
+
+    const filterControls = {
+        providerStateFilter: currentProviderFilters.state,
+        providerFailureFilter: currentProviderFilters.recentFailureType,
+        providerSelectableFilter: currentProviderFilters.selectable,
+        providerAbnormalFilter: currentProviderFilters.abnormal,
+        providerNeedsRefreshFilter: currentProviderFilters.needsRefresh,
+        providerSortBy: currentProviderFilters.sortBy,
+        providerSortOrder: currentProviderFilters.sortOrder
+    };
+
+    Object.entries(filterControls).forEach(([id, value]) => {
+        const element = modal.querySelector(`#${id}`);
+        if (element) {
+            element.value = value || '';
+        }
+    });
+
+    const searchInput = modal.querySelector('#nodeSearchInput');
+    if (searchInput && searchInput.value !== nodeSearchTerm) {
+        searchInput.value = nodeSearchTerm;
     }
 
     const providerList = modal.querySelector('#providerList');
@@ -830,6 +1117,31 @@ function addModalEventListeners(modal) {
             }, 250);
         });
     }
+
+    const filterBindings = [
+        ['#providerStateFilter', 'state'],
+        ['#providerFailureFilter', 'recentFailureType'],
+        ['#providerSelectableFilter', 'selectable'],
+        ['#providerAbnormalFilter', 'abnormal'],
+        ['#providerNeedsRefreshFilter', 'needsRefresh'],
+        ['#providerSortBy', 'sortBy'],
+        ['#providerSortOrder', 'sortOrder']
+    ];
+
+    filterBindings.forEach(([selector, key]) => {
+        const element = modal.querySelector(selector);
+        if (!element) {
+            return;
+        }
+
+        element.addEventListener('change', () => {
+            currentProviderFilters = normalizeProviderFilters({
+                ...currentProviderFilters,
+                [key]: element.value
+            });
+            window.goToProviderPage(1);
+        });
+    });
 
     // 视图模式切换事件处理
     const viewModeBtns = modal.querySelectorAll('.view-mode-btn');
@@ -1300,7 +1612,12 @@ function getFieldOrder(provider) {
         'isHealthy', 'lastUsed', 'usageCount', 'errorCount', 'lastErrorTime',
         'uuid', 'isDisabled', 'lastHealthCheckTime', 'lastHealthCheckModel', 'lastErrorMessage',
         'notSupportedModels', 'supportedModels', 'refreshCount', 'needsRefresh', '_lastSelectionSeq',
-        'lastRefreshTime', 'lastSuccessTime'
+        'lastRefreshTime', 'lastSuccessTime', 'state', 'cooldownUntil', 'cooldownRemainingMs',
+        'recoveryTime', 'scheduledRecoveryTime', 'stateScore', 'schedulerScore', 'schedulerRank',
+        'selectableRank', 'schedulerDecision', 'schedulerDecisionReason', 'schedulerPenaltyBreakdown',
+        'schedulerPenaltySummary', 'recentFailureType', 'recentHttpStatus', 'activeRequests',
+        'waitingRequests', 'isSelectable', 'isSelectionCandidate', 'isPrimaryCandidate',
+        'consecutiveFailures', 'identityFingerprint', 'lastStateReason', 'lastStateChangeAt'
     ];
     
     // 尝试从当前模态框上下文中获取提供商类型
@@ -1597,6 +1914,238 @@ async function refreshProviderConfig(providerType) {
     } catch (error) {
         console.error('Failed to refresh provider config:', error);
     }
+}
+
+function downloadJsonFile(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+    const downloadUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = downloadUrl;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(downloadUrl);
+}
+
+function showBatchDialog({ title, description = '', contentHtml, onConfirm, confirmText = '确认' }) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.style.zIndex = '3200';
+    overlay.innerHTML = `
+        <div class="modal-content provider-batch-dialog">
+            <div class="modal-header">
+                <h3>${escapeHtml(title)}</h3>
+                <button class="modal-close" type="button" aria-label="${escapeHtml(t('common.close'))}">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                ${description ? `<p class="provider-batch-dialog-desc">${description}</p>` : ''}
+                ${contentHtml}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary provider-batch-cancel">${t('common.cancel')}</button>
+                <button type="button" class="btn btn-primary provider-batch-confirm">${confirmText}</button>
+            </div>
+        </div>
+    `;
+
+    const closeDialog = () => overlay.remove();
+    overlay.addEventListener('click', event => {
+        if (event.target === overlay) {
+            closeDialog();
+        }
+    });
+    overlay.querySelector('.modal-close')?.addEventListener('click', closeDialog);
+    overlay.querySelector('.provider-batch-cancel')?.addEventListener('click', closeDialog);
+    overlay.querySelector('.provider-batch-confirm')?.addEventListener('click', async () => {
+        try {
+            await onConfirm(overlay);
+            closeDialog();
+        } catch (error) {
+            showToast(t('common.error'), error.message || String(error), 'error');
+        }
+    });
+
+    document.body.appendChild(overlay);
+    return overlay;
+}
+
+async function exportFilteredProviders(providerType) {
+    try {
+        const data = await window.apiClient.get(`/providers/${encodeURIComponent(providerType)}/export?${new URLSearchParams({
+            search: nodeSearchTerm.trim(),
+            state: currentProviderFilters.state,
+            recentFailureType: currentProviderFilters.recentFailureType,
+            selectable: currentProviderFilters.selectable,
+            abnormal: currentProviderFilters.abnormal,
+            needsRefresh: currentProviderFilters.needsRefresh,
+            sortBy: currentProviderFilters.sortBy,
+            sortOrder: currentProviderFilters.sortOrder
+        }).toString()}`);
+
+        if (!data.providers || data.providers.length === 0) {
+            showToast(t('common.info'), '当前筛选没有可导出的节点', 'info');
+            return;
+        }
+
+        const dateLabel = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+        downloadJsonFile(`${providerType}-providers-${dateLabel}.json`, data);
+        showToast(t('common.success'), `已导出 ${data.count} 个节点`, 'success');
+    } catch (error) {
+        console.error('Failed to export providers:', error);
+        showToast(t('common.error'), `导出失败: ${error.message}`, 'error');
+    }
+}
+
+async function dedupeProviderNodes(providerType) {
+    if (!confirm(`确定对 ${providerType} 执行去重吗？将按 smart 策略移除重复节点。`)) {
+        return;
+    }
+
+    try {
+        const response = await window.apiClient.post(`/providers/${encodeURIComponent(providerType)}/dedupe`, {
+            strategy: 'smart'
+        });
+        showToast(t('common.success'), `去重完成，移除了 ${response.removedCount || 0} 个重复节点`, 'success');
+        await refreshProviderConfig(providerType);
+    } catch (error) {
+        console.error('Failed to dedupe providers:', error);
+        showToast(t('common.error'), `去重失败: ${error.message}`, 'error');
+    }
+}
+
+async function runFilteredBatchAction(providerType, action) {
+    const actionLabels = {
+        enable: '批量启用',
+        disable: '批量禁用',
+        'refresh-status': '批量刷新状态'
+    };
+    const actionLabel = actionLabels[action] || action;
+
+    if (!confirm(`确定执行${actionLabel}吗？操作范围为当前筛选结果。`)) {
+        return;
+    }
+
+    try {
+        const response = await window.apiClient.post(`/providers/${encodeURIComponent(providerType)}/batch-action`, {
+            action,
+            selector: buildCurrentSelector()
+        });
+
+        if (action === 'refresh-status') {
+            showToast(t('common.success'), `${actionLabel}完成，成功 ${response.successCount || 0}，失败 ${response.failCount || 0}`, 'success');
+        } else {
+            showToast(t('common.success'), `${actionLabel}完成，影响 ${response.targetCount || 0} 个节点`, 'success');
+        }
+
+        await refreshProviderConfig(providerType);
+    } catch (error) {
+        console.error(`Failed to ${action}:`, error);
+        showToast(t('common.error'), `${actionLabel}失败: ${error.message}`, 'error');
+    }
+}
+
+function showBatchImportProvidersDialog(providerType) {
+    showBatchDialog({
+        title: `批量导入 ${providerType}`,
+        description: '支持直接粘贴 JSON 数组，或 { "providers": [...] } 对象。默认 append + smart dedupe。',
+        contentHtml: `
+            <div class="provider-batch-form">
+                <label>导入模式</label>
+                <select id="batchImportMode" class="provider-toolbar-select">
+                    <option value="append">append</option>
+                    <option value="replace">replace</option>
+                </select>
+                <label>去重策略</label>
+                <select id="batchImportDedupeStrategy" class="provider-toolbar-select">
+                    <option value="smart">smart</option>
+                    <option value="uuid">uuid</option>
+                    <option value="credential">credential</option>
+                </select>
+                <label>JSON 内容</label>
+                <textarea id="batchImportTextarea" class="provider-batch-textarea" placeholder='[{"customName":"node-a","OPENAI_BASE_URL":"https://example.com","OPENAI_API_KEY":"sk-..."}]'></textarea>
+            </div>
+        `,
+        confirmText: '导入',
+        onConfirm: async overlay => {
+            const rawText = overlay.querySelector('#batchImportTextarea')?.value?.trim() || '';
+            if (!rawText) {
+                throw new Error('请先输入 JSON 内容');
+            }
+
+            let parsed;
+            try {
+                parsed = JSON.parse(rawText);
+            } catch (error) {
+                throw new Error('JSON 解析失败');
+            }
+
+            const providers = Array.isArray(parsed) ? parsed : parsed.providers;
+            if (!Array.isArray(providers) || providers.length === 0) {
+                throw new Error('未找到可导入的 providers 数组');
+            }
+
+            const response = await window.apiClient.post(`/providers/${encodeURIComponent(providerType)}/batch-import`, {
+                mode: overlay.querySelector('#batchImportMode')?.value || 'append',
+                dedupe: true,
+                dedupeStrategy: overlay.querySelector('#batchImportDedupeStrategy')?.value || 'smart',
+                providers
+            });
+
+            showToast(t('common.success'), `导入完成，新增 ${response.importedCount || 0}，去重移除 ${response.removedCount || 0}`, 'success');
+            await refreshProviderConfig(providerType);
+        }
+    });
+}
+
+function showBatchUpdateModelsDialog(providerType) {
+    showBatchDialog({
+        title: `批量改模型 · ${providerType}`,
+        description: '留空表示不修改该字段。supportedModels / notSupportedModels 使用逗号分隔。',
+        contentHtml: `
+            <div class="provider-batch-form">
+                <label>checkModelName</label>
+                <input id="batchCheckModelName" class="provider-batch-input" type="text" placeholder="例如 gpt-4.1-mini">
+                <label>supportedModels</label>
+                <input id="batchSupportedModels" class="provider-batch-input" type="text" placeholder="model-a, model-b">
+                <label>notSupportedModels</label>
+                <input id="batchUnsupportedModels" class="provider-batch-input" type="text" placeholder="model-x, model-y">
+            </div>
+        `,
+        confirmText: '应用',
+        onConfirm: async overlay => {
+            const checkModelName = overlay.querySelector('#batchCheckModelName')?.value ?? '';
+            const supportedModelsRaw = overlay.querySelector('#batchSupportedModels')?.value ?? '';
+            const unsupportedModelsRaw = overlay.querySelector('#batchUnsupportedModels')?.value ?? '';
+            const payload = {};
+
+            if (checkModelName.trim()) {
+                payload.checkModelName = checkModelName.trim();
+            }
+            if (supportedModelsRaw.trim()) {
+                payload.supportedModels = supportedModelsRaw.split(',').map(item => item.trim()).filter(Boolean);
+            }
+            if (unsupportedModelsRaw.trim()) {
+                payload.notSupportedModels = unsupportedModelsRaw.split(',').map(item => item.trim()).filter(Boolean);
+            }
+
+            if (Object.keys(payload).length === 0) {
+                throw new Error('至少填写一个模型字段');
+            }
+
+            const response = await window.apiClient.post(`/providers/${encodeURIComponent(providerType)}/batch-action`, {
+                action: 'update-models',
+                selector: buildCurrentSelector(),
+                payload
+            });
+
+            showToast(t('common.success'), `已批量更新 ${response.targetCount || 0} 个节点的模型配置`, 'success');
+            await refreshProviderConfig(providerType);
+        }
+    });
 }
 
 /**
@@ -2246,6 +2795,11 @@ export {
     performHealthCheck,
     deleteUnhealthyProviders,
     refreshUnhealthyUuids,
+    exportFilteredProviders,
+    dedupeProviderNodes,
+    runFilteredBatchAction,
+    showBatchImportProvidersDialog,
+    showBatchUpdateModelsDialog,
     openSupportedModelsPicker,
     loadModelsForProviderType,
     renderNotSupportedModelsSelector,
@@ -2269,6 +2823,11 @@ window.performHealthCheck = performHealthCheck;
 window.performSingleHealthCheck = performSingleHealthCheck;
 window.deleteUnhealthyProviders = deleteUnhealthyProviders;
 window.refreshUnhealthyUuids = refreshUnhealthyUuids;
+window.exportFilteredProviders = exportFilteredProviders;
+window.dedupeProviderNodes = dedupeProviderNodes;
+window.runFilteredBatchAction = runFilteredBatchAction;
+window.showBatchImportProvidersDialog = showBatchImportProvidersDialog;
+window.showBatchUpdateModelsDialog = showBatchUpdateModelsDialog;
 window.openSupportedModelsPicker = openSupportedModelsPicker;
 window.goToProviderPage = goToProviderPage;
 window.refreshProviderUuid = refreshProviderUuid;

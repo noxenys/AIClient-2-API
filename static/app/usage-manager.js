@@ -3,6 +3,7 @@
 import { showToast } from './utils.js';
 import { getAuthHeaders } from './auth.js';
 import { t, getCurrentLanguage } from './i18n.js';
+import { getProviderRuntimeMetaText, getProviderRuntimeState } from './provider-state-display.js';
 
 /**
  * 不支持显示用量数据的提供商列表
@@ -17,13 +18,6 @@ let currentProviderConfigs = null;
 let usageManagerInitialized = false;
 let usageDataCache = null;
 let supportedProvidersCache = null;
-
-function getUsageInstanceRuntimeState(instance = {}) {
-    if (instance.state) return instance.state;
-    if (instance.isDisabled) return 'disabled';
-    if (instance.isHealthy) return 'healthy';
-    return 'risky';
-}
 
 /**
  * 更新提供商配置
@@ -544,7 +538,7 @@ function createInstanceUsageCard(instance, providerType) {
     const header = document.createElement('div');
     header.className = 'usage-instance-header';
     
-    const runtimeState = getUsageInstanceRuntimeState(instance);
+    const runtimeState = getProviderRuntimeState(instance);
     const healthBadge = runtimeState === 'disabled'
         ? `<span class="badge badge-disabled" data-i18n="usage.card.status.disabled">${t('usage.card.status.disabled')}</span>`
         : runtimeState === 'healthy'
@@ -565,13 +559,10 @@ function createInstanceUsageCard(instance, providerType) {
     // 获取用户邮箱和订阅信息
     const userEmail = instance.usage?.user?.email || '';
     const subscriptionTitle = instance.usage?.subscription?.title || '';
-    const runtimeStateMeta = [];
-    if (runtimeState === 'cooldown' && instance.cooldownUntil) {
-        runtimeStateMeta.push(`${t('modal.provider.cooldownUntil')}: ${new Date(instance.cooldownUntil).toLocaleString(getCurrentLanguage())}`);
-    }
-    if (instance.lastStateReason) {
-        runtimeStateMeta.push(`${t('modal.provider.runtimeReason')}: ${instance.lastStateReason}`);
-    }
+    const runtimeStateMetaText = getProviderRuntimeMetaText(instance, {
+        t,
+        formatDateTime: value => new Date(value).toLocaleString(getCurrentLanguage())
+    });
     
     // 用户信息行
     const userInfoHTML = userEmail ? `
@@ -580,9 +571,9 @@ function createInstanceUsageCard(instance, providerType) {
             ${subscriptionTitle ? `<span class="user-subscription">${subscriptionTitle}</span>` : ''}
         </div>
     ` : '';
-    const runtimeStateInfoHTML = runtimeStateMeta.length > 0 ? `
+    const runtimeStateInfoHTML = runtimeStateMetaText ? `
         <div class="instance-user-info">
-            <span class="user-subscription">${runtimeStateMeta.join(' | ')}</span>
+            <span class="user-subscription">${runtimeStateMetaText}</span>
         </div>
     ` : '';
 

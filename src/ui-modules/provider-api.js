@@ -14,16 +14,209 @@ import {
     detectAvailableModelsForProvider,
     inferSupportedModelsFromProviderConfig
 } from '../providers/provider-detection.js';
-import { generateUUID, createProviderConfig, formatSystemPath, detectProviderFromPath, addToUsedPaths, isPathUsed, pathsEqual } from '../utils/provider-utils.js';
+import {
+    PROVIDER_MAPPINGS,
+    generateUUID,
+    createProviderConfig,
+    formatSystemPath,
+    detectProviderFromPath,
+    addToUsedPaths,
+    isPathUsed,
+    pathsEqual
+} from '../utils/provider-utils.js';
 import { removeProvidersByPredicate, shouldPermanentlyDeleteProvider } from '../utils/provider-cleanup.js';
-import { inferProviderStateFromConfig } from '../utils/provider-state.js';
+import { inferProviderStateFromConfig, isProviderStateSelectable } from '../utils/provider-state.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, invalidateServiceAdapter } from '../providers/adapter.js';
 
-// 文件级互斥锁：防止并发读写导致数据丢失
-// 安全净化：移除用户输入字段中的危险内容（script、事件处理器、javascript:协议等），
-// 存储原始文本。HTML 转义统一由前端 escHtml() 负责，避免双编码问题。
-// 安全净化：移除用户输入字段中的危险内容，并可选地过滤敏感 API 密钥
+const BLOCKED_SELECTION_SCORE = 1e18;
+const DEFAULT_BATCH_IMPORT_MODE = 'append';
+const DEFAULT_BATCH_DEDUPE_STRATEGY = 'smart';
+
+const NON_SENSITIVE_FIELDS = new Set([
+    'uuid',
+    'customName',
+    'isHealthy',
+    'isDisabled',
+    'needsRefresh',
+    'state',
+    'stateScore',
+    'schedulerScore',
+    'schedulerRank',
+    'selectableRank',
+    'recentFailureType',
+    'recentHttpStatus'
+]);
+
+const PROVIDER_IDENTITY_KEYS = {
+    'openai-custom': ['OPENAI_BASE_URL', 'OPENAI_API_KEY'],
+    'openaiResponses-custom': ['OPENAI_BASE_URL', 'OPENAI_API_KEY'],
+    'claude-custom': ['CLAUDE_BASE_URL', 'CLAUDE_API_KEY'],
+    'forward-api': ['FORWARD_BASE_URL', 'FORWARD_API_KEY']
+};
+
+function parseBooleanQuery(value) {
+    if (value === undefined || value === null || value === '') {
+        return null;
+    }
+
+    if (value === true || value === 'true' || value === '1') {
+        return true;
+    }
+
+    if (value === false || value === 'false' || value === '0') {
+        return false;
+    }
+
+    return null;
+}
+
+function parseCsvParam(value) {
+    return String(value || '')
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean);
+}
+
+function normalizeSortOrder(order = 'asc') {
+    return String(order || 'asc').toLowerCase() === 'desc' ? 'desc' : 'asc';
+}
+
+function extractRecentHttpStatus(message = '') {
+    const match = String(message || '').match(/\b(401|403|429|500|502|503|504)\b/);
+    return match ? Number(match[1]) : null;
+}
+
+function getProviderCredentialKeys(providerType = '') {
+    const mapping = PROVIDER_MAPPINGS.find(item => item.providerType === providerType);
+    if (mapping?.credPathKey) {
+        return [mapping.credPathKey];
+    }
+
+    return PROVIDER_IDENTITY_KEYS[providerType] || [];
+}
+
+function buildProviderIdentityFingerprint(providerType, provider = {}) {
+    const keys = getProviderCredentialKeys(providerType);
+    const parts = keys
+        .map(key => {
+            const value = provider[key];
+            if (typeof value === 'string' && value.trim()) {
+                return `${key}:${value.trim()}`;
+            }
+            return null;
+        })
+        .filter(Boolean);
+
+    if (parts.length > 0) {
+        return `${providerType}|${parts.join('|')}`;
+    }
+
+    const fallbackFields = ['OPENAI_BASE_URL', 'CLAUDE_BASE_URL', 'FORWARD_BASE_URL', 'customName'];
+    const fallbackParts = fallbackFields
+        .map(key => {
+            const value = provider[key];
+            if (typeof value === 'string' && value.trim()) {
+                return `${key}:${value.trim()}`;
+            }
+            return null;
+        })
+        .filter(Boolean);
+
+    return fallbackParts.length > 0 ? `${providerType}|${fallbackParts.join('|')}` : null;
+}
+
+function formatSchedulerPenaltyText(penaltyBreakdown = []) {
+    return penaltyBreakdown.map(item => `${item.label}: ${item.value}`).join(' | ');
+}
+
+function deriveSchedulerDecisionReason(provider = {}) {
+    const reason = provider.schedulerDecisionReason || provider.lastStateReason || provider.lastErrorMessage;
+    if (reason) {
+        return String(reason);
+    }
+
+    if (provider.isSelectionCandidate) {
+        return provider.isPrimaryCandidate ? 'current top selectable node' : 'eligible but ranked behind other nodes';
+    }
+
+    if (provider.isDisabled) {
+        return 'disabled by user';
+    }
+
+    if (provider.needsRefresh) {
+        return 'waiting refresh before reuse';
+    }
+
+    return 'state not selectable';
+}
+
+function getProviderRecoveryTime(provider = {}) {
+    return provider.recoveryTime || provider.scheduledRecoveryTime || provider.cooldownUntil || null;
+}
+
+function getCooldownRemainingMs(provider = {}) {
+    const recoveryTime = getProviderRecoveryTime(provider);
+    if (!recoveryTime) {
+        return null;
+    }
+
+    const timestamp = new Date(recoveryTime).getTime();
+    if (!Number.isFinite(timestamp)) {
+        return null;
+    }
+
+    return Math.max(0, timestamp - Date.now());
+}
+
+function getProviderStatusCounts(provider = {}) {
+    return {
+        activeRequests: Number(provider.activeRequests || 0),
+        waitingRequests: Number(provider.waitingRequests || 0)
+    };
+}
+
+function buildObservedProvider(providerType, provider, schedulerSnapshot = null) {
+    const runtimeState = inferProviderStateFromConfig(provider);
+    const schedulerData = schedulerSnapshot?.get(provider.uuid) || null;
+    const recoveryTime = schedulerData?.recoveryTime || getProviderRecoveryTime(provider);
+    const cooldownRemainingMs = schedulerData?.cooldownRemainingMs ?? getCooldownRemainingMs(provider);
+    const recentHttpStatus = schedulerData?.recentHttpStatus ?? provider.recentHttpStatus ?? extractRecentHttpStatus(provider.lastStateReason || provider.lastErrorMessage || '');
+    const isSelectable = schedulerData?.isSelectionCandidate ?? provider.isSelectable ?? (isProviderStateSelectable(runtimeState) && !provider.isDisabled && !provider.needsRefresh);
+    const { activeRequests, waitingRequests } = getProviderStatusCounts(provider);
+
+    return {
+        ...provider,
+        providerType,
+        state: runtimeState,
+        isHealthy: runtimeState === 'healthy',
+        isDisabled: runtimeState === 'disabled',
+        isSelectable,
+        isSelectionCandidate: schedulerData?.isSelectionCandidate ?? provider.isSelectionCandidate ?? isSelectable,
+        isPrimaryCandidate: schedulerData?.isPrimaryCandidate ?? provider.isPrimaryCandidate ?? false,
+        schedulerScore: schedulerData?.schedulerScore ?? provider.schedulerScore ?? null,
+        schedulerRank: schedulerData?.schedulerRank ?? provider.schedulerRank ?? null,
+        selectableRank: schedulerData?.selectableRank ?? provider.selectableRank ?? null,
+        schedulerDecision: schedulerData?.schedulerDecision ?? provider.schedulerDecision ?? null,
+        schedulerDecisionReason: deriveSchedulerDecisionReason({
+            ...provider,
+            ...schedulerData
+        }),
+        schedulerPenaltyBreakdown: schedulerData?.penaltyBreakdown ?? provider.schedulerPenaltyBreakdown ?? [],
+        schedulerPenaltySummary: formatSchedulerPenaltyText(schedulerData?.penaltyBreakdown ?? provider.schedulerPenaltyBreakdown ?? []),
+        stateScore: Number(provider.stateScore || 0),
+        consecutiveFailures: Number(provider.consecutiveFailures || 0),
+        recentFailureType: provider.recentFailureType || null,
+        recentHttpStatus: recentHttpStatus ?? null,
+        recentFailureLabel: recentHttpStatus ? `HTTP ${recentHttpStatus}` : (provider.recentFailureType || null),
+        recoveryTime,
+        cooldownRemainingMs,
+        activeRequests,
+        waitingRequests,
+        identityFingerprint: buildProviderIdentityFingerprint(providerType, provider)
+    };
+}
+
 function sanitizeProviderData(provider, maskSensitive = false) {
     if (!provider || typeof provider !== 'object') return provider;
     const sanitized = { ...provider };
@@ -33,7 +226,7 @@ function sanitizeProviderData(provider, maskSensitive = false) {
     if (maskSensitive) {
         for (const key in sanitized) {
             // 排除已知非敏感字段
-            if (key === 'uuid' || key === 'customName' || key === 'isHealthy' || key === 'isDisabled' || key === 'needsRefresh') continue;
+            if (NON_SENSITIVE_FIELDS.has(key)) continue;
             
             const val = sanitized[key];
             if (typeof val !== 'string' || !val) continue;
@@ -108,32 +301,249 @@ function getProviderHealthSummary(providers = []) {
         stateCounts,
         healthyCount: stateCounts.healthy,
         disabledCount: stateCounts.disabled,
-        unhealthyCount: stateCounts.cooldown + stateCounts.risky + stateCounts.banned + stateCounts.unknown
+        unhealthyCount: stateCounts.cooldown + stateCounts.risky + stateCounts.banned + stateCounts.unknown,
+        selectableCount: providers.filter(provider => provider.isSelectable).length,
+        busyCount: providers.filter(provider => Number(provider.activeRequests || 0) > 0 || Number(provider.waitingRequests || 0) > 0).length
     };
 }
 
+function getNextCooldownUntil(providers = []) {
+    const cooldownEntries = providers
+        .filter(provider => inferProviderStateFromConfig(provider) === 'cooldown' && getProviderRecoveryTime(provider))
+        .map(provider => {
+            const recoveryTime = getProviderRecoveryTime(provider);
+            const timestamp = new Date(recoveryTime).getTime();
+            if (!Number.isFinite(timestamp)) {
+                return null;
+            }
+
+            return {
+                value: recoveryTime,
+                timestamp
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.timestamp - b.timestamp);
+
+    return cooldownEntries[0]?.value || null;
+}
+
 function buildProviderSummary(providers = [], previewLimit = 24) {
-    const { stateCounts, healthyCount, disabledCount, unhealthyCount } = getProviderHealthSummary(providers);
+    const {
+        stateCounts,
+        healthyCount,
+        disabledCount,
+        unhealthyCount,
+        selectableCount,
+        busyCount
+    } = getProviderHealthSummary(providers);
+    const authFailureCount = providers.filter(provider => provider.recentFailureType === 'auth').length;
+    const rateLimitFailureCount = providers.filter(provider => provider.recentFailureType === 'rate_limit').length;
     return {
         totalCount: providers.length,
         healthyCount,
         disabledCount,
         unhealthyCount,
+        selectableCount,
+        busyCount,
         stateCounts,
+        cooldownCount: stateCounts.cooldown || 0,
+        riskyCount: stateCounts.risky || 0,
+        bannedCount: stateCounts.banned || 0,
+        authFailureCount,
+        rateLimitFailureCount,
+        nextCooldownUntil: getNextCooldownUntil(providers),
         totalUsage: providers.reduce((sum, provider) => sum + (provider.usageCount || 0), 0),
         totalErrors: providers.reduce((sum, provider) => sum + (provider.errorCount || 0), 0),
+        topCandidateUuid: providers.find(provider => provider.isPrimaryCandidate)?.uuid || null,
         previewNodes: providers.slice(0, previewLimit).map(provider => ({
             uuid: provider.uuid,
             customName: provider.customName || null,
-            state: inferProviderStateFromConfig(provider),
-            isHealthy: inferProviderStateFromConfig(provider) === 'healthy',
-            isDisabled: inferProviderStateFromConfig(provider) === 'disabled',
+            state: provider.state,
+            isHealthy: provider.isHealthy,
+            isDisabled: provider.isDisabled,
+            isSelectable: provider.isSelectable,
+            isPrimaryCandidate: provider.isPrimaryCandidate || false,
+            schedulerScore: provider.schedulerScore ?? null,
+            schedulerRank: provider.schedulerRank ?? null,
+            selectableRank: provider.selectableRank ?? null,
             usageCount: provider.usageCount || 0,
             errorCount: provider.errorCount || 0,
             cooldownUntil: provider.cooldownUntil || null,
-            lastStateReason: provider.lastStateReason || provider.lastErrorMessage || null
+            cooldownRemainingMs: provider.cooldownRemainingMs ?? null,
+            recoveryTime: provider.recoveryTime || null,
+            recentFailureType: provider.recentFailureType || null,
+            recentHttpStatus: provider.recentHttpStatus ?? null,
+            lastStateReason: provider.lastStateReason || provider.lastErrorMessage || null,
+            schedulerDecision: provider.schedulerDecision || null,
+            schedulerDecisionReason: provider.schedulerDecisionReason || null,
+            activeRequests: provider.activeRequests || 0,
+            waitingRequests: provider.waitingRequests || 0
         }))
     };
+}
+
+function buildRuntimeProviderEntries(currentConfig, providerPoolManager, providerType = null) {
+    if (!providerPoolManager?.providerStatus) {
+        return providerType ? [] : {};
+    }
+
+    const sourceEntries = providerType
+        ? { [providerType]: providerPoolManager.providerStatus[providerType] || [] }
+        : providerPoolManager.providerStatus;
+
+    const result = {};
+    for (const [type, entries] of Object.entries(sourceEntries)) {
+        const schedulerSnapshot = providerPoolManager.getProviderSelectionSnapshot
+            ? providerPoolManager.getProviderSelectionSnapshot(type)
+            : new Map();
+        result[type] = (entries || []).map(entry => buildObservedProvider(type, {
+            ...entry.config,
+            activeRequests: entry.state?.activeCount || 0,
+            waitingRequests: entry.state?.waitingCount || 0
+        }, schedulerSnapshot));
+    }
+
+    return providerType ? (result[providerType] || []) : result;
+}
+
+function buildFileBackedProviderEntries(currentConfig, providerPoolManager, providerType = null) {
+    const providerPools = loadProviderPools(currentConfig, providerPoolManager);
+    if (providerType) {
+        return (providerPools[providerType] || []).map(provider => buildObservedProvider(providerType, provider));
+    }
+
+    const result = {};
+    for (const [type, providers] of Object.entries(providerPools)) {
+        result[type] = (providers || []).map(provider => buildObservedProvider(type, provider));
+    }
+    return result;
+}
+
+function getObservedProvidersByType(currentConfig, providerPoolManager, providerType = null) {
+    if (providerPoolManager?.providerStatus) {
+        return buildRuntimeProviderEntries(currentConfig, providerPoolManager, providerType);
+    }
+
+    return buildFileBackedProviderEntries(currentConfig, providerPoolManager, providerType);
+}
+
+function matchesProviderStateFilter(provider, stateFilter = []) {
+    return stateFilter.length === 0 || stateFilter.includes(provider.state);
+}
+
+function matchesRecentFailureFilter(provider, failureFilter = []) {
+    return failureFilter.length === 0 || failureFilter.includes(provider.recentFailureType || '');
+}
+
+function matchesSelectableFilter(provider, selectableFilter) {
+    return selectableFilter === null || Boolean(provider.isSelectable) === selectableFilter;
+}
+
+function matchesAbnormalFilter(provider, abnormalFilter) {
+    if (abnormalFilter === null) {
+        return true;
+    }
+
+    const isAbnormal = provider.state !== 'healthy' || provider.needsRefresh || Number(provider.errorCount || 0) > 0;
+    return abnormalFilter ? isAbnormal : !isAbnormal;
+}
+
+function applyProviderFilters(providers = [], filters = {}) {
+    const stateFilter = Array.isArray(filters.state) ? filters.state : parseCsvParam(filters.state);
+    const failureFilter = Array.isArray(filters.recentFailureType) ? filters.recentFailureType : parseCsvParam(filters.recentFailureType);
+    const selectableFilter = parseBooleanQuery(filters.selectable);
+    const abnormalFilter = parseBooleanQuery(filters.abnormal);
+    const needsRefreshFilter = parseBooleanQuery(filters.needsRefresh);
+    const searchTerm = String(filters.search || '').trim().toLowerCase();
+
+    return providers.filter(provider => {
+        if (!matchesProviderStateFilter(provider, stateFilter)) {
+            return false;
+        }
+
+        if (!matchesRecentFailureFilter(provider, failureFilter)) {
+            return false;
+        }
+
+        if (!matchesSelectableFilter(provider, selectableFilter)) {
+            return false;
+        }
+
+        if (!matchesAbnormalFilter(provider, abnormalFilter)) {
+            return false;
+        }
+
+        if (needsRefreshFilter !== null && Boolean(provider.needsRefresh) !== needsRefreshFilter) {
+            return false;
+        }
+
+        if (!searchTerm) {
+            return true;
+        }
+
+        return Object.values(provider).some(value => {
+            if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+                return String(value).toLowerCase().includes(searchTerm);
+            }
+
+            if (Array.isArray(value)) {
+                return value.some(item => {
+                    if (typeof item === 'string' || typeof item === 'number') {
+                        return String(item).toLowerCase().includes(searchTerm);
+                    }
+
+                    if (item && typeof item === 'object') {
+                        return Object.values(item).some(nested => String(nested || '').toLowerCase().includes(searchTerm));
+                    }
+
+                    return false;
+                });
+            }
+
+            return false;
+        });
+    });
+}
+
+function sortProvidersForView(providers = [], sortBy = 'schedulerRank', sortOrder = 'asc') {
+    const normalizedSortOrder = normalizeSortOrder(sortOrder);
+    const sortFactor = normalizedSortOrder === 'desc' ? -1 : 1;
+
+    const getSortValue = provider => {
+        switch (sortBy) {
+            case 'schedulerScore':
+                return provider.schedulerScore ?? BLOCKED_SELECTION_SCORE;
+            case 'stateScore':
+                return provider.stateScore ?? 0;
+            case 'usageCount':
+                return provider.usageCount ?? 0;
+            case 'errorCount':
+                return provider.errorCount ?? 0;
+            case 'cooldownRemainingMs':
+                return provider.cooldownRemainingMs ?? -1;
+            case 'recentHttpStatus':
+                return provider.recentHttpStatus ?? 0;
+            case 'selectableRank':
+                return provider.selectableRank ?? BLOCKED_SELECTION_SCORE;
+            case 'lastStateChangeAt':
+                return new Date(provider.lastStateChangeAt || 0).getTime();
+            case 'schedulerRank':
+            default:
+                return provider.schedulerRank ?? BLOCKED_SELECTION_SCORE;
+        }
+    };
+
+    return [...providers].sort((a, b) => {
+        const valueA = getSortValue(a);
+        const valueB = getSortValue(b);
+
+        if (valueA !== valueB) {
+            return (valueA < valueB ? -1 : 1) * sortFactor;
+        }
+
+        return String(a.customName || a.uuid || '').localeCompare(String(b.customName || b.uuid || '')) * sortFactor;
+    });
 }
 
 /**
@@ -226,6 +636,108 @@ function persistProviderStatusToFile(currentConfig, providerPoolManager) {
 
     writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
     return filePath;
+}
+
+function persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools) {
+    const filePath = getProviderPoolsFilePath(currentConfig);
+    writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
+
+    if (providerPoolManager) {
+        providerPoolManager.providerPools = providerPools;
+        providerPoolManager.initializeProviderStatus();
+    }
+
+    return filePath;
+}
+
+function getObservedProvidersForType(currentConfig, providerPoolManager, providerType, filters = {}, sortOptions = {}) {
+    const providers = getObservedProvidersByType(currentConfig, providerPoolManager, providerType) || [];
+    const filteredProviders = applyProviderFilters(providers, filters);
+    return sortProvidersForView(filteredProviders, sortOptions.sortBy, sortOptions.sortOrder);
+}
+
+function getTargetProviderUuids(currentConfig, providerPoolManager, providerType, selector = {}) {
+    if (Array.isArray(selector.uuids) && selector.uuids.length > 0) {
+        return [...new Set(selector.uuids.map(uuid => String(uuid).trim()).filter(Boolean))];
+    }
+
+    if (selector.filters && typeof selector.filters === 'object') {
+        return getObservedProvidersForType(currentConfig, providerPoolManager, providerType, selector.filters, selector.sortOptions || {})
+            .map(provider => provider.uuid);
+    }
+
+    return [];
+}
+
+function getProviderTypeEntry(providerType, providerPools = {}) {
+    return Array.isArray(providerPools[providerType]) ? providerPools[providerType] : [];
+}
+
+function normalizeImportedProvider(providerType, provider = {}) {
+    const normalized = filterMaskedData({ ...provider });
+    if (!normalized.uuid) {
+        normalized.uuid = generateUUID();
+    }
+
+    if (!normalized.customName) {
+        normalized.customName = null;
+    }
+
+    normalized.state = normalized.state || inferProviderStateFromConfig(normalized);
+    return normalized;
+}
+
+function dedupeProviders(providerType, providers = [], strategy = DEFAULT_BATCH_DEDUPE_STRATEGY) {
+    const uuidSeen = new Set();
+    const identitySeen = new Set();
+    const dedupedProviders = [];
+    const removedProviders = [];
+
+    for (const provider of providers) {
+        const uuidKey = provider.uuid || null;
+        const identityKey = buildProviderIdentityFingerprint(providerType, provider);
+
+        const duplicateByUuid = uuidKey && uuidSeen.has(uuidKey);
+        const duplicateByIdentity = identityKey && identitySeen.has(identityKey);
+        const isDuplicate = strategy === 'uuid'
+            ? duplicateByUuid
+            : strategy === 'credential'
+                ? duplicateByIdentity
+                : duplicateByUuid || duplicateByIdentity;
+
+        if (isDuplicate) {
+            removedProviders.push(provider);
+            continue;
+        }
+
+        if (uuidKey) {
+            uuidSeen.add(uuidKey);
+        }
+        if (identityKey) {
+            identitySeen.add(identityKey);
+        }
+        dedupedProviders.push(provider);
+    }
+
+    return { dedupedProviders, removedProviders };
+}
+
+function sanitizeExportProviders(providers = [], maskSensitive = false) {
+    return providers.map(provider => sanitizeProviderData(provider, maskSensitive));
+}
+
+function applyBatchModelsPatch(provider, payload = {}) {
+    if (payload.checkModelName !== undefined) {
+        provider.checkModelName = payload.checkModelName || null;
+    }
+
+    if (payload.supportedModels !== undefined) {
+        provider.supportedModels = normalizeModelIds(Array.isArray(payload.supportedModels) ? payload.supportedModels : []);
+    }
+
+    if (payload.notSupportedModels !== undefined) {
+        provider.notSupportedModels = normalizeModelIds(Array.isArray(payload.notSupportedModels) ? payload.notSupportedModels : []);
+    }
 }
 
 function isAuthHealthCheckError(errorMessage = '') {
@@ -342,41 +854,20 @@ function withFileLock(fn) {
 export async function handleGetProviders(req, res, currentConfig, providerPoolManager) {
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const summaryOnly = url.searchParams.get('summary') === 'true';
-    // 1. 获取支持的基础提供商类型
     const registeredProviders = getRegisteredProviders();
     let poolTypes = [];
 
-    // 2. 从管理器获取当前所有池的状态
-    const providerStatus = {};
-    if (providerPoolManager) {
-        for (const [type, providers] of Object.entries(providerPoolManager.providerStatus)) {
-            providerStatus[type] = providers.map(p => ({
-                ...p.config,
-                activeRequests: p.state?.activeCount || 0,
-                waitingRequests: p.state?.waitingCount || 0
-            }));
-        }
-    }
-    
-    // 3. 补全号池配置文件中的所有组
-    const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
+    const providerStatus = getObservedProvidersByType(currentConfig, providerPoolManager) || {};
+    const filePath = getProviderPoolsFilePath(currentConfig);
     try {
         if (existsSync(filePath)) {
             const poolsData = JSON.parse(readFileSync(filePath, 'utf-8'));
             poolTypes = Object.keys(poolsData);
             poolTypes.forEach(type => {
-                // 如果管理器中没有该组，或者该组是空的，则从文件中补全
                 if (!providerStatus[type] || providerStatus[type].length === 0) {
-                    const fileProviders = poolsData[type] || [];
-                    if (fileProviders.length > 0) {
-                        providerStatus[type] = fileProviders.map(p => ({
-                            ...p,
-                            activeRequests: 0,
-                            waitingRequests: 0
-                        }));
-                    } else if (!providerStatus[type]) {
-                        providerStatus[type] = [];
-                    }
+                    providerStatus[type] = (poolsData[type] || []).map(provider => buildObservedProvider(type, provider));
+                } else if (!providerStatus[type]) {
+                    providerStatus[type] = [];
                 }
             });
         }
@@ -384,7 +875,6 @@ export async function handleGetProviders(req, res, currentConfig, providerPoolMa
         logger.warn('[UI API] Failed to supplement provider status:', error.message);
     }
 
-    // 合并生成支持的类型列表
     const supportedProviders = [...new Set([...registeredProviders, ...poolTypes])];
     const providerStateCountsByType = {};
     const providersSummary = {};
@@ -433,26 +923,27 @@ export async function handleGetProviders(req, res, currentConfig, providerPoolMa
  * 获取特定提供商类型的详细信息
  */
 export async function handleGetProviderType(req, res, currentConfig, providerPoolManager, providerType) {
-    let providerPools = {};
-    const filePath = currentConfig.PROVIDER_POOLS_FILE_PATH || 'configs/provider_pools.json';
-    try {
-        if (providerPoolManager && providerPoolManager.providerPools) {
-            providerPools = providerPoolManager.providerPools;
-        } else if (filePath && existsSync(filePath)) {
-            const poolsData = JSON.parse(readFileSync(filePath, 'utf-8'));
-            providerPools = poolsData;
-        }
-    } catch (error) {
-        logger.warn('[UI API] Failed to load provider pools:', error.message);
-    }
-
-    const providers = providerPools[providerType] || [];
-    const { stateCounts, healthyCount, unhealthyCount } = getProviderHealthSummary(providers);
     const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     const search = (url.searchParams.get('search') || '').trim();
+    const filters = {
+        search,
+        state: parseCsvParam(url.searchParams.get('state')),
+        recentFailureType: parseCsvParam(url.searchParams.get('recentFailureType')),
+        selectable: url.searchParams.get('selectable'),
+        abnormal: url.searchParams.get('abnormal'),
+        needsRefresh: url.searchParams.get('needsRefresh')
+    };
+    const sortBy = url.searchParams.get('sortBy') || 'schedulerRank';
+    const sortOrder = url.searchParams.get('sortOrder') || 'asc';
     const pageParam = url.searchParams.get('page');
     const pageSizeParam = url.searchParams.get('pageSize');
-    const usePaginatedResponse = pageParam !== null || pageSizeParam !== null || search !== '';
+    const usePaginatedResponse = pageParam !== null || pageSizeParam !== null || search !== '' ||
+        filters.state.length > 0 || filters.recentFailureType.length > 0 ||
+        filters.selectable !== null || filters.abnormal !== null || filters.needsRefresh !== null ||
+        sortBy !== 'schedulerRank' || sortOrder !== 'asc';
+
+    const providers = getObservedProvidersByType(currentConfig, providerPoolManager, providerType) || [];
+    const { stateCounts, healthyCount, unhealthyCount, selectableCount, busyCount } = getProviderHealthSummary(providers);
 
     if (!usePaginatedResponse) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -462,14 +953,18 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
             totalCount: providers.length,
             healthyCount,
             unhealthyCount,
-            stateCounts
+            selectableCount,
+            busyCount,
+            stateCounts,
+            summary: buildProviderSummary(providers)
         }));
         return true;
     }
 
-    const filteredProviders = search
-        ? providers.filter(provider => matchesProviderSearch(provider, search))
-        : providers;
+    const filteredProviders = getObservedProvidersForType(currentConfig, providerPoolManager, providerType, filters, {
+        sortBy,
+        sortOrder
+    });
     const pageSize = parsePositiveInteger(pageSizeParam, 20);
     const totalPages = Math.max(1, Math.ceil(filteredProviders.length / pageSize));
     const page = parsePositiveInteger(pageParam, 1, { min: 1, max: totalPages });
@@ -486,14 +981,315 @@ export async function handleGetProviderType(req, res, currentConfig, providerPoo
         totalCount: providers.length,
         healthyCount,
         unhealthyCount,
+        selectableCount,
+        busyCount,
         stateCounts,
+        summary: buildProviderSummary(providers),
         filteredCount: filteredProviders.length,
         page,
         pageSize,
         totalPages,
-        search
+        search,
+        filters: {
+            ...filters,
+            selectable: parseBooleanQuery(filters.selectable),
+            abnormal: parseBooleanQuery(filters.abnormal),
+            needsRefresh: parseBooleanQuery(filters.needsRefresh)
+        },
+        sortBy,
+        sortOrder: normalizeSortOrder(sortOrder)
     }));
     return true;
+}
+
+export async function handleExportProviders(req, res, currentConfig, providerPoolManager, providerType) {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    const filters = {
+        search: (url.searchParams.get('search') || '').trim(),
+        state: parseCsvParam(url.searchParams.get('state')),
+        recentFailureType: parseCsvParam(url.searchParams.get('recentFailureType')),
+        selectable: url.searchParams.get('selectable'),
+        abnormal: url.searchParams.get('abnormal'),
+        needsRefresh: url.searchParams.get('needsRefresh')
+    };
+    const sortOptions = {
+        sortBy: url.searchParams.get('sortBy') || 'schedulerRank',
+        sortOrder: url.searchParams.get('sortOrder') || 'asc'
+    };
+    const maskSensitive = parseBooleanQuery(url.searchParams.get('masked')) === true;
+
+    const observedProviders = getObservedProvidersForType(currentConfig, providerPoolManager, providerType, filters, sortOptions);
+    const selectedUuids = new Set(observedProviders.map(provider => provider.uuid));
+    const rawProviders = getProviderTypeEntry(providerType, loadProviderPools(currentConfig, providerPoolManager));
+    const orderedProviders = observedProviders
+        .map(provider => rawProviders.find(item => item.uuid === provider.uuid))
+        .filter(Boolean)
+        .filter(provider => selectedUuids.has(provider.uuid));
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+        success: true,
+        providerType,
+        count: orderedProviders.length,
+        exportedAt: new Date().toISOString(),
+        filters: {
+            ...filters,
+            selectable: parseBooleanQuery(filters.selectable),
+            abnormal: parseBooleanQuery(filters.abnormal),
+            needsRefresh: parseBooleanQuery(filters.needsRefresh)
+        },
+        providers: sanitizeExportProviders(orderedProviders, maskSensitive)
+    }));
+    return true;
+}
+
+export async function handleBatchImportProviders(req, res, currentConfig, providerPoolManager, providerType) {
+    return withFileLock(async () => {
+        const body = await getRequestBody(req);
+        const importMode = body.mode === 'replace' ? 'replace' : DEFAULT_BATCH_IMPORT_MODE;
+        const dedupeEnabled = body.dedupe !== false;
+        const dedupeStrategy = body.dedupeStrategy || DEFAULT_BATCH_DEDUPE_STRATEGY;
+        const importProviders = Array.isArray(body.providers) ? body.providers : [];
+
+        if (importProviders.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'providers array is required' } }));
+            return true;
+        }
+
+        const providerPools = loadProviderPools(currentConfig, providerPoolManager);
+        const existingProviders = getProviderTypeEntry(providerType, providerPools);
+        const normalizedImports = importProviders.map(provider => normalizeImportedProvider(providerType, provider));
+
+        let nextProviders = importMode === 'replace'
+            ? normalizedImports
+            : [...existingProviders, ...normalizedImports];
+
+        let removedProviders = [];
+        if (dedupeEnabled) {
+            const result = dedupeProviders(providerType, nextProviders, dedupeStrategy);
+            nextProviders = result.dedupedProviders;
+            removedProviders = result.removedProviders;
+        }
+
+        providerPools[providerType] = nextProviders;
+        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools);
+
+        broadcastEvent('config_update', {
+            action: 'batch_import',
+            filePath,
+            providerType,
+            importMode,
+            importedCount: normalizedImports.length,
+            removedCount: removedProviders.length,
+            totalCount: nextProviders.length,
+            timestamp: new Date().toISOString()
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            success: true,
+            providerType,
+            mode: importMode,
+            importedCount: normalizedImports.length,
+            removedCount: removedProviders.length,
+            totalCount: nextProviders.length,
+            removedProviders: removedProviders.map(provider => ({
+                uuid: provider.uuid,
+                customName: provider.customName || null
+            }))
+        }));
+        return true;
+    }).catch(error => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    });
+}
+
+export async function handleDedupeProviders(req, res, currentConfig, providerPoolManager, providerType) {
+    return withFileLock(async () => {
+        const body = await getRequestBody(req);
+        const strategy = body.strategy || DEFAULT_BATCH_DEDUPE_STRATEGY;
+        const providerPools = loadProviderPools(currentConfig, providerPoolManager);
+        const currentProviders = getProviderTypeEntry(providerType, providerPools);
+        const { dedupedProviders, removedProviders } = dedupeProviders(providerType, currentProviders, strategy);
+
+        providerPools[providerType] = dedupedProviders;
+        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools);
+
+        broadcastEvent('config_update', {
+            action: 'batch_dedupe',
+            filePath,
+            providerType,
+            removedCount: removedProviders.length,
+            strategy,
+            timestamp: new Date().toISOString()
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            success: true,
+            providerType,
+            strategy,
+            totalCount: dedupedProviders.length,
+            removedCount: removedProviders.length,
+            removedProviders: removedProviders.map(provider => ({
+                uuid: provider.uuid,
+                customName: provider.customName || null
+            }))
+        }));
+        return true;
+    }).catch(error => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    });
+}
+
+export async function handleBatchProviderAction(req, res, currentConfig, providerPoolManager, providerType) {
+    return withFileLock(async () => {
+        const body = await getRequestBody(req);
+        const action = String(body.action || '').trim();
+        const selector = body.selector || { uuids: body.uuids, filters: body.filters };
+        const targetUuids = getTargetProviderUuids(currentConfig, providerPoolManager, providerType, selector);
+
+        if (!action) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'action is required' } }));
+            return true;
+        }
+
+        if (targetUuids.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'No target providers matched the selector' } }));
+            return true;
+        }
+
+        if (action === 'refresh-status') {
+            if (!providerPoolManager?.providerStatus?.[providerType]) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: { message: 'Provider pool manager not initialized' } }));
+                return true;
+            }
+
+            const providerStatuses = providerPoolManager.providerStatus[providerType]
+                .filter(providerStatus => targetUuids.includes(providerStatus.config.uuid));
+            const results = [];
+
+            for (const providerStatus of providerStatuses) {
+                results.push(await runProviderHealthCheck(providerPoolManager, providerType, providerStatus));
+            }
+
+            const filePath = persistProviderStatusToFile(currentConfig, providerPoolManager);
+            broadcastEvent('config_update', {
+                action: 'batch_refresh_status',
+                filePath,
+                providerType,
+                targetCount: targetUuids.length,
+                results,
+                timestamp: new Date().toISOString()
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                providerType,
+                action,
+                targetCount: targetUuids.length,
+                successCount: results.filter(result => result.success).length,
+                failCount: results.filter(result => !result.success).length,
+                results
+            }));
+            return true;
+        }
+
+        const providerPools = loadProviderPools(currentConfig, providerPoolManager);
+        const providers = getProviderTypeEntry(providerType, providerPools);
+        const targets = providers.filter(provider => targetUuids.includes(provider.uuid));
+
+        if (targets.length === 0) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: 'Matched providers are no longer available' } }));
+            return true;
+        }
+
+        targets.forEach(provider => {
+            if (action === 'enable') {
+                provider.isDisabled = false;
+                if (provider.state === 'disabled') {
+                    provider.state = null;
+                }
+                provider.lastStateReason = 'Enabled by batch action';
+                return;
+            }
+
+            if (action === 'disable') {
+                provider.isDisabled = true;
+                provider.state = 'disabled';
+                provider.lastStateReason = 'Disabled by batch action';
+                return;
+            }
+
+            if (action === 'reset-health') {
+                provider.isHealthy = true;
+                provider.isDisabled = false;
+                provider.state = 'healthy';
+                provider.stateScore = 100;
+                provider.cooldownUntil = null;
+                provider.scheduledRecoveryTime = null;
+                provider.lastErrorMessage = null;
+                provider.lastStateReason = 'Health reset by batch action';
+                provider.errorCount = 0;
+                provider.consecutiveFailures = 0;
+                provider.recentFailureType = null;
+                provider.needsRefresh = false;
+                provider.refreshCount = 0;
+                provider.lastHealthCheckTime = new Date().toISOString();
+                return;
+            }
+
+            if (action === 'update-models') {
+                applyBatchModelsPatch(provider, body.payload || {});
+            }
+        });
+
+        if (!['enable', 'disable', 'reset-health', 'update-models'].includes(action)) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: { message: `Unsupported batch action: ${action}` } }));
+            return true;
+        }
+
+        providerPools[providerType] = providers;
+        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools);
+
+        broadcastEvent('config_update', {
+            action: 'batch_action',
+            filePath,
+            providerType,
+            batchAction: action,
+            targetCount: targets.length,
+            targetUuids,
+            timestamp: new Date().toISOString()
+        });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            success: true,
+            providerType,
+            action,
+            targetCount: targets.length,
+            targets: targets.map(provider => ({
+                uuid: provider.uuid,
+                customName: provider.customName || null
+            }))
+        }));
+        return true;
+    }).catch(error => {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    });
 }
 
 /**

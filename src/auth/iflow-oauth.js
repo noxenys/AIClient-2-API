@@ -20,8 +20,8 @@ const IFLOW_OAUTH_CONFIG = {
     successRedirectURL: 'https://iflow.cn/oauth/success',
     
     // 客户端凭据
-    clientId: '10009311001',
-    clientSecret: '4Z3YjXycVsQvyGF1etiNlIBB4RsqSDtW',
+    clientId: process.env.IFLOW_OAUTH_CLIENT_ID || '10009311001',
+    clientSecret: process.env.IFLOW_OAUTH_CLIENT_SECRET || '',
     
     // 本地回调端口
     callbackPort: 8087,
@@ -33,6 +33,12 @@ const IFLOW_OAUTH_CONFIG = {
     // 日志前缀
     logPrefix: '[iFlow Auth]'
 };
+
+function ensureIFlowClientSecret() {
+    if (!IFLOW_OAUTH_CONFIG.clientSecret) {
+        throw new Error('Missing IFLOW_OAUTH_CLIENT_SECRET environment variable');
+    }
+}
 
 /**
  * 活动的 iFlow 回调服务器管理
@@ -190,6 +196,7 @@ function generateIFlowAuthorizationURL(state, port) {
  * @returns {Promise<Object>} 令牌数据
  */
 async function exchangeIFlowCodeForTokens(code, redirectUri) {
+    ensureIFlowClientSecret();
     const form = new URLSearchParams({
         grant_type: 'authorization_code',
         code: code,
@@ -531,6 +538,7 @@ export async function handleIFlowOAuth(currentConfig, options = {}) {
  * @returns {Promise<Object>} 新的令牌数据
  */
 export async function refreshIFlowTokens(refreshToken) {
+    ensureIFlowClientSecret();
     const form = new URLSearchParams({
         grant_type: 'refresh_token',
         refresh_token: refreshToken,

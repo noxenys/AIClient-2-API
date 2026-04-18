@@ -17,26 +17,9 @@
     "uuid": "^11.1.0",
     "ws": "^8.19.0"
   },
-  "devDependencies": {
-    "@babel/preset-env": "^7.28.0",
-    "@jest/globals": "^29.7.0",
-    "babel-jest": "^30.0.5",
-    "babel-plugin-transform-import-meta": "^2.3.3",
-    "jest": "^29.7.0",
-    "jest-environment-node": "^29.7.0",
-    "supertest": "^6.3.3"
-  },
   "scripts": {
     "start": "node src/core/master.js",
     "start:standalone": "node src/services/api-server.js",
-    "start:dev": "node src/core/master.js --dev",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "test:verbose": "jest --verbose",
-    "test:silent": "jest --silent",
-    "test:unit": "node run-tests.js --unit",
-    "test:integration": "node run-tests.js --integration",
-    "test:summary": "node test-summary.js"
+    "start:dev": "node src/core/master.js --dev"
   }
 }

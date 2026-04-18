@@ -129,6 +129,38 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await providerApi.handleGetSupportedProviders(req, res, currentConfig, providerPoolManager);
     }
 
+    // Export filtered providers for a specific provider type
+    // NOTE: This must be before the generic /{providerType} route to avoid matching 'export' as providerType detail
+    const exportProvidersMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/export$/);
+    if (method === 'GET' && exportProvidersMatch) {
+        const providerType = decodeURIComponent(exportProvidersMatch[1]);
+        return await providerApi.handleExportProviders(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
+    // Batch import providers for a specific provider type
+    // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'batch-import' as UUID
+    const batchImportProvidersMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/batch-import$/);
+    if (method === 'POST' && batchImportProvidersMatch) {
+        const providerType = decodeURIComponent(batchImportProvidersMatch[1]);
+        return await providerApi.handleBatchImportProviders(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
+    // Dedupe providers for a specific provider type
+    // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'dedupe' as UUID
+    const dedupeProvidersMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/dedupe$/);
+    if (method === 'POST' && dedupeProvidersMatch) {
+        const providerType = decodeURIComponent(dedupeProvidersMatch[1]);
+        return await providerApi.handleDedupeProviders(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
+    // Run batch actions for providers of a specific provider type
+    // NOTE: This must be before the generic /{providerType}/{uuid} route to avoid matching 'batch-action' as UUID
+    const batchActionProvidersMatch = pathParam.match(/^\/api\/providers\/([^\/]+)\/batch-action$/);
+    if (method === 'POST' && batchActionProvidersMatch) {
+        const providerType = decodeURIComponent(batchActionProvidersMatch[1]);
+        return await providerApi.handleBatchProviderAction(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
     // Get specific provider type details
     const providerTypeMatch = pathParam.match(/^\/api\/providers\/([^\/]+)$/);
     if (method === 'GET' && providerTypeMatch) {

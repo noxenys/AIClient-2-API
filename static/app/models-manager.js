@@ -4,7 +4,7 @@
  */
 
 import { t } from './i18n.js';
-import { getProviderModelMap, invalidateModelRegistryCache } from './model-registry-manager.js';
+import { getProviderModelEntriesMap, invalidateModelRegistryCache } from './model-registry-manager.js';
 
 // 模型数据缓存
 let modelsCache = null;
@@ -34,7 +34,7 @@ async function fetchProviderModels() {
     }
     
     try {
-        modelsCache = await getProviderModelMap();
+        modelsCache = await getProviderModelEntriesMap();
         return modelsCache;
     } catch (error) {
         console.error('[Models Manager] Failed to fetch provider models:', error);
@@ -148,17 +148,34 @@ function renderModelsList(models) {
                     </div>
                 </div>
                 <div class="provider-models-content" id="models-${providerType}">
-                    ${modelList.map(model => `
-                        <div class="model-item" onclick="window.copyModelName('${escapeHtml(model)}', this)" title="${t('models.clickToCopy') || '点击复制'}">
+                    ${modelList.map(modelEntry => {
+                        const canonicalModelId = typeof modelEntry === 'string' ? modelEntry : modelEntry.id;
+                        const displayName = typeof modelEntry === 'string'
+                            ? modelEntry
+                            : (modelEntry.displayName || modelEntry.id);
+                        const aliases = Array.isArray(modelEntry?.aliases) ? modelEntry.aliases : [];
+                        const showMeta = displayName !== canonicalModelId || aliases.length > 0;
+
+                        return `
+                        <div class="model-item" onclick="window.copyModelName('${escapeHtml(canonicalModelId)}', this)" title="${t('models.clickToCopy') || '点击复制'}">
                             <div class="model-item-icon">
                                 <i class="fas fa-cube"></i>
                             </div>
-                            <span class="model-item-name">${escapeHtml(model)}</span>
+                            <div class="model-item-body">
+                                <span class="model-item-name">${escapeHtml(displayName)}</span>
+                                ${showMeta ? `
+                                <div class="model-item-meta">
+                                    ${displayName !== canonicalModelId ? `<code class="model-item-id">${escapeHtml(canonicalModelId)}</code>` : ''}
+                                    ${aliases.map(alias => `<span class="model-item-alias">${escapeHtml(alias)}</span>`).join('')}
+                                </div>
+                                ` : ''}
+                            </div>
                             <div class="model-item-copy">
                                 <i class="fas fa-copy"></i>
                             </div>
                         </div>
-                    `).join('')}
+                    `;
+                    }).join('')}
                 </div>
             </div>
         `;

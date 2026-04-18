@@ -11,6 +11,7 @@ import { updateUsageProviderConfigs } from './usage-manager.js';
 import { updateConfigProviderConfigs } from './config-manager.js';
 import { loadConfigList, updateProviderFilterOptions } from './upload-config-manager.js';
 import { setServiceMode } from './event-handlers.js';
+import { getProviderRuntimeMetaItems, getProviderRuntimeState, getProviderSummaryCooldownText } from './provider-state-display.js';
 
 // 保存初始服务器时间和运行时间
 let initialServerTime = null;
@@ -32,11 +33,99 @@ function isSectionActive(sectionId) {
     return getActiveSectionId() === sectionId;
 }
 
+function formatProviderStateDateTime(value) {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString(getCurrentLanguage()) : String(value || '');
+}
+
 function summarizeProviderState(account) {
-    if (account.isDisabled) return 'disabled';
-    if (account.state) return account.state;
-    if (account.isHealthy) return 'healthy';
-    return 'risky';
+    return getProviderRuntimeState(account);
+}
+
+function translateOrFallback(key, fallback, params = {}) {
+    const translated = t(key, params);
+    return translated === key ? fallback : translated;
+}
+
+function buildProviderStateMetaLines(provider = {}) {
+    return getProviderRuntimeMetaItems(provider, {
+        t,
+        formatDateTime: formatProviderStateDateTime
+    }).map(item => `${item.label}: ${item.value}`);
+}
+
+function buildProviderStateBreakdown(stateCounts = {}) {
+    const items = [
+        {
+            key: 'cooldown',
+            count: stateCounts.cooldown || 0,
+            label: `429 ${t('modal.provider.runtimeState.cooldown')}`,
+            className: 'is-cooldown'
+        },
+        {
+            key: 'risky',
+            count: stateCounts.risky || 0,
+            label: t('modal.provider.runtimeState.risky'),
+            className: 'is-risky'
+        },
+        {
+            key: 'banned',
+            count: stateCounts.banned || 0,
+            label: t('modal.provider.runtimeState.banned'),
+            className: 'is-banned'
+        },
+        {
+            key: 'disabled',
+            count: stateCounts.disabled || 0,
+            label: t('modal.provider.runtimeState.disabled'),
+            className: 'is-disabled'
+        }
+    ].filter(item => item.count > 0);
+
+    if (items.length === 0) {
+        return '';
+    }
+
+    return `
+        <div class="provider-runtime-summary">
+            ${items.map(item => `
+                <span class="provider-runtime-pill ${item.className}">
+                    ${item.label}: ${item.count}
+                </span>
+            `).join('')}
+        </div>
+    `;
+}
+
+function buildProviderOperationalSummary(summary = {}) {
+    const items = [
+        {
+            label: translateOrFallback('providers.stat.selectableAccounts', '可选'),
+            value: summary.selectableCount || 0
+        },
+        {
+            label: translateOrFallback('providers.stat.busyAccounts', '繁忙'),
+            value: summary.busyCount || 0
+        },
+        {
+            label: '401/403',
+            value: summary.authFailureCount || 0
+        },
+        {
+            label: '429',
+            value: summary.rateLimitFailureCount || 0
+        }
+    ];
+
+    return `
+        <div class="provider-runtime-summary provider-runtime-summary-ops">
+            ${items.map(item => `
+                <span class="provider-runtime-pill">
+                    ${item.label}: ${item.value}
+                </span>
+            `).join('')}
+        </div>
+    `;
 }
 
 function countAccountStates(accounts = []) {
@@ -77,7 +166,7 @@ function buildDashboardRenderKey(sortedProviderTypes, providers) {
     return sortedProviderTypes.map(providerType => {
         const accounts = providers[providerType] || [];
         return `${providerType}:[${accounts.map(account =>
-            `${account.uuid}:${summarizeProviderState(account)}:${account.usageCount || 0}:${account.errorCount || 0}`
+            `${account.uuid}:${summarizeProviderState(account)}:${account.usageCount || 0}:${account.errorCount || 0}:${account.cooldownUntil || ''}:${account.lastStateReason || ''}`
         ).join(',')}]`;
     }).join('|');
 }
@@ -94,10 +183,16 @@ function buildProviderSummaryListRenderKey(sortedProviderTypes, summaries, confi
             providerType,
             summary.totalCount || 0,
             summary.healthyCount || 0,
+            summary.selectableCount || 0,
+            summary.busyCount || 0,
             stateCounts.cooldown || 0,
             stateCounts.risky || 0,
             stateCounts.banned || 0,
             stateCounts.disabled || 0,
+            summary.authFailureCount || 0,
+            summary.rateLimitFailureCount || 0,
+            summary.topCandidateUuid || '',
+            summary.nextCooldownUntil || '',
             summary.totalUsage || 0,
             summary.totalErrors || 0
         ].join(':');
@@ -108,7 +203,7 @@ function buildDashboardSummaryRenderKey(sortedProviderTypes, summaries) {
     return sortedProviderTypes.map(providerType => {
         const summary = summaries[providerType] || {};
         const previewNodes = summary.previewNodes || [];
-        return `${providerType}:${summary.totalCount || 0}:${summary.healthyCount || 0}:${summary.unhealthyCount || 0}:${summary.disabledCount || 0}:[${previewNodes.map(node => `${node.uuid}:${summarizeProviderState(node)}`).join(',')}]`;
+        return `${providerType}:${summary.totalCount || 0}:${summary.healthyCount || 0}:${summary.unhealthyCount || 0}:${summary.disabledCount || 0}:${summary.selectableCount || 0}:${summary.busyCount || 0}:${summary.authFailureCount || 0}:${summary.rateLimitFailureCount || 0}:${summary.topCandidateUuid || ''}:${summary.nextCooldownUntil || ''}:[${previewNodes.map(node => `${node.uuid}:${summarizeProviderState(node)}:${node.cooldownUntil || ''}:${node.lastStateReason || ''}:${node.schedulerRank || ''}:${node.recentHttpStatus || ''}`).join(',')}]`;
     }).join('|');
 }
 
@@ -707,6 +802,13 @@ function renderProviderSummaries(summaries, supportedProviders = []) {
             const statusIcon = isEmptyState ? 'fa-info-circle' : (abnormalCount === 0 ? 'fa-check-circle' : 'fa-exclamation-triangle');
             const statusText = isEmptyState ? t('providers.status.empty') : t('providers.status.healthy', { healthy: healthyCount, total: totalCount });
             const displayName = configMap[providerType]?.name || providerType;
+            const cooldownSummaryText = getProviderSummaryCooldownText(summary, {
+                t,
+                formatDateTime: formatProviderStateDateTime
+            });
+            const topCandidateText = summary.topCandidateUuid
+                ? `首选节点: ${summary.topCandidateUuid}`
+                : '';
 
             const providerDiv = document.createElement('div');
             providerDiv.className = 'provider-item';
@@ -744,6 +846,20 @@ function renderProviderSummaries(summaries, supportedProviders = []) {
                         <span class="provider-stat-value">${errorCount}</span>
                     </div>
                 </div>
+                ${buildProviderStateBreakdown(stateCounts)}
+                ${buildProviderOperationalSummary(summary)}
+                ${cooldownSummaryText ? `
+                    <div class="provider-runtime-summary-text">
+                        <i class="fas fa-hourglass-half"></i>
+                        <span>${cooldownSummaryText}</span>
+                    </div>
+                ` : ''}
+                ${topCandidateText ? `
+                    <div class="provider-runtime-summary-text">
+                        <i class="fas fa-crown"></i>
+                        <span>${topCandidateText}</span>
+                    </div>
+                ` : ''}
             `;
             if (isEmptyState) {
                 providerDiv.classList.add('empty-provider');
@@ -3878,6 +3994,13 @@ function renderProviderStatusOverviewSummary(summaries, configMap, sortedProvide
         const disabledCount = stateCounts.disabled || 0;
         const unhealthyCount = (stateCounts.cooldown || 0) + (stateCounts.risky || 0) + (stateCounts.banned || 0) + (stateCounts.unknown || 0);
         const hiddenPreviewCount = Math.max(0, totalCount - previewNodes.length);
+        const cooldownSummaryText = getProviderSummaryCooldownText(summary, {
+            t,
+            formatDateTime: formatProviderStateDateTime
+        });
+        const topCandidateText = summary.topCandidateUuid
+            ? `首选节点: ${summary.topCandidateUuid}`
+            : '';
 
         const card = document.createElement('div');
         card.className = 'provider-status-card';
@@ -3900,6 +4023,7 @@ function renderProviderStatusOverviewSummary(summaries, configMap, sortedProvide
                 <span style="color: #ef4444; ${unhealthyCount === 0 ? 'opacity: 0.3;' : ''}"><i class="fas fa-times"></i> ${unhealthyCount}</span>
                 <span style="color: #9ca3af; ${disabledCount === 0 ? 'opacity: 0.3;' : ''}"><i class="fas fa-minus-circle"></i> ${disabledCount}</span>
             </div>
+            ${buildProviderOperationalSummary(summary)}
             <div class="node-dots">
                 ${previewNodes.map(acc => {
                     const runtimeState = summarizeProviderState(acc);
@@ -3915,10 +4039,26 @@ function renderProviderStatusOverviewSummary(summaries, configMap, sortedProvide
                         statusTitle += ` (${t('modal.provider.status.healthy')})`;
                     }
                     statusTitle += `\n${t('providers.stat.usageCount')}: ${acc.usageCount || 0}\n${t('providers.stat.errorCount')}: ${acc.errorCount || 0}`;
+                    const runtimeMetaLines = buildProviderStateMetaLines(acc);
+                    if (runtimeMetaLines.length > 0) {
+                        statusTitle += `\n${runtimeMetaLines.join('\n')}`;
+                    }
                     return `<span class="node-dot ${statusClass}" title="${statusTitle}" onclick="window.jumpToProviderNode('${type}', '${acc.uuid}', event)"></span>`;
                 }).join('')}
                 ${hiddenPreviewCount > 0 ? `<span class="node-dot disabled" title="+${hiddenPreviewCount} more">+${hiddenPreviewCount}</span>` : ''}
             </div>
+            ${cooldownSummaryText ? `
+                <div class="provider-runtime-summary-text compact">
+                    <i class="fas fa-hourglass-half"></i>
+                    <span>${cooldownSummaryText}</span>
+                </div>
+            ` : ''}
+            ${topCandidateText ? `
+                <div class="provider-runtime-summary-text compact">
+                    <i class="fas fa-crown"></i>
+                    <span>${topCandidateText}</span>
+                </div>
+            ` : ''}
             <div class="provider-stats-summary">
                 <span><i class="fas fa-paper-plane" style="font-size: 0.7rem; opacity: 0.7;"></i> ${summary.totalUsage || 0}</span>
                 <span><i class="fas fa-exclamation-circle" style="font-size: 0.7rem; opacity: 0.7;"></i> ${summary.totalErrors || 0}</span>

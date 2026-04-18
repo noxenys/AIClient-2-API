@@ -34,8 +34,14 @@ const IFLOW_API_BASE_URL = 'https://apis.iflow.cn/v1';
 const IFLOW_USER_AGENT = 'iFlow-Cli';
 const IFLOW_OAUTH_TOKEN_ENDPOINT = 'https://iflow.cn/oauth/token';
 const IFLOW_USER_INFO_ENDPOINT = 'https://iflow.cn/api/oauth/getUserInfo';
-const IFLOW_OAUTH_CLIENT_ID = '10009311001';
-const IFLOW_OAUTH_CLIENT_SECRET = '4Z3YjXycVsQvyGF1etiNlIBB4RsqSDtW';
+const IFLOW_OAUTH_CLIENT_ID = process.env.IFLOW_OAUTH_CLIENT_ID || '10009311001';
+const IFLOW_OAUTH_CLIENT_SECRET = process.env.IFLOW_OAUTH_CLIENT_SECRET || '';
+
+function ensureIFlowOAuthSecret() {
+    if (!IFLOW_OAUTH_CLIENT_SECRET) {
+        throw new Error('[iFlow] Missing IFLOW_OAUTH_CLIENT_SECRET environment variable');
+    }
+}
 
 // 默认模型列表
 const IFLOW_MODELS = getProviderModels(MODEL_PROVIDER.IFLOW_API);
@@ -154,6 +160,7 @@ async function refreshOAuthTokens(refreshToken, axiosInstance = null) {
     if (!refreshToken || refreshToken.trim() === '') {
         throw new Error('[iFlow] refresh_token is empty');
     }
+    ensureIFlowOAuthSecret();
     
     logger.info('[iFlow] Refreshing OAuth tokens...');
     

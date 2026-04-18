@@ -610,6 +610,284 @@ export class ProviderPoolManager {
         return baseScore + usageScore + sequenceScore + loadScore + freshBonus + riskyPenalty;
     }
 
+    _getRecentHttpStatus(errorMessage = '') {
+        const match = String(errorMessage || '').match(/\b(401|403|429|500|502|503|504)\b/);
+        return match ? Number(match[1]) : null;
+    }
+
+    _buildSelectionPenaltyBreakdown(providerStatus, now = Date.now(), minSeqInPool = -1) {
+        const config = providerStatus.config;
+        const state = providerStatus.state;
+        const runtimeState = normalizeProviderState(config.state, inferProviderStateFromConfig(config, now));
+        const breakdown = [];
+
+        if (runtimeState === PROVIDER_STATES.DISABLED || config.isDisabled) {
+            breakdown.push({ key: 'disabled', label: 'disabled', impact: 'blocked', value: 1 });
+            return breakdown;
+        }
+
+        if (config.needsRefresh) {
+            breakdown.push({ key: 'refresh', label: 'needs refresh', impact: 'blocked', value: 1 });
+        }
+
+        if (runtimeState === PROVIDER_STATES.BANNED) {
+            breakdown.push({ key: 'auth', label: 'auth blocked', impact: 'blocked', value: 1 });
+        }
+
+        if (runtimeState === PROVIDER_STATES.COOLDOWN) {
+            const cooldownUntil = new Date(config.cooldownUntil || 0).getTime();
+            const remainingMs = Number.isFinite(cooldownUntil)
+                ? Math.max(0, cooldownUntil - now)
+                : this.rateLimitCooldownMs;
+            breakdown.push({
+                key: 'cooldown',
+                label: 'rate limit cooldown',
+                impact: 'blocked',
+                value: remainingMs
+            });
+        }
+
+        const usagePenalty = (config.usageCount || 0) * 10000;
+        if (usagePenalty > 0) {
+            breakdown.push({ key: 'usage', label: 'usage penalty', impact: usagePenalty, value: config.usageCount || 0 });
+        }
+
+        const lastSelectionSeq = config._lastSelectionSeq || 0;
+        if (minSeqInPool === -1) {
+            const pool = this.providerStatus[providerStatus.type] || [];
+            minSeqInPool = pool.reduce((min, p) => Math.min(min, p.config._lastSelectionSeq || 0), Infinity);
+        }
+        const relativeSeq = Math.max(0, lastSelectionSeq - minSeqInPool);
+        const cappedRelativeSeq = Math.min(relativeSeq, 100);
+        const sequencePenalty = cappedRelativeSeq * 1000;
+        if (sequencePenalty > 0) {
+            breakdown.push({
+                key: 'rotation',
+                label: 'round robin penalty',
+                impact: sequencePenalty,
+                value: cappedRelativeSeq
+            });
+        }
+
+        const loadPenalty = (state.activeCount || 0) * 5000;
+        if (loadPenalty > 0) {
+            breakdown.push({
+                key: 'load',
+                label: 'active request penalty',
+                impact: loadPenalty,
+                value: state.activeCount || 0
+            });
+        }
+
+        const waitingPenalty = (state.waitingCount || 0) * 1e10;
+        const concurrencyLimit = parseInt(config.concurrencyLimit || 0, 10);
+        const queueLimit = parseInt(config.queueLimit || 0, 10);
+        if (concurrencyLimit > 0 && state.activeCount >= concurrencyLimit) {
+            breakdown.push({
+                key: 'concurrency',
+                label: 'concurrency saturated',
+                impact: waitingPenalty || 1e15,
+                value: `${state.activeCount || 0}/${concurrencyLimit}`
+            });
+        }
+
+        if (queueLimit > 0 && state.waitingCount >= queueLimit) {
+            breakdown.push({
+                key: 'queue',
+                label: 'queue saturated',
+                impact: 1e17,
+                value: `${state.waitingCount || 0}/${queueLimit}`
+            });
+        }
+
+        if (runtimeState === PROVIDER_STATES.RISKY) {
+            breakdown.push({ key: 'risky', label: 'risky state', impact: 1e12, value: 1 });
+        }
+
+        const consecutiveFailures = Number(config.consecutiveFailures || 0);
+        if (consecutiveFailures > 0) {
+            breakdown.push({
+                key: 'failures',
+                label: 'consecutive failures',
+                impact: Math.min(consecutiveFailures * 5, 30),
+                value: consecutiveFailures
+            });
+        }
+
+        return breakdown;
+    }
+
+    _getSelectionDecision(providerStatus, snapshot, now = Date.now()) {
+        const config = providerStatus.config;
+        const state = providerStatus.state;
+        const runtimeState = normalizeProviderState(config.state, inferProviderStateFromConfig(config, now));
+        const recentStatus = this._getRecentHttpStatus(config.lastStateReason || config.lastErrorMessage || '');
+
+        if (config.isDisabled || runtimeState === PROVIDER_STATES.DISABLED) {
+            return {
+                decision: 'skipped_disabled',
+                reason: 'disabled by user',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        if (config.needsRefresh) {
+            return {
+                decision: 'skipped_refresh',
+                reason: 'waiting refresh before reuse',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        if (runtimeState === PROVIDER_STATES.BANNED) {
+            return {
+                decision: 'skipped_auth',
+                reason: config.lastStateReason || 'recent 401/403 auth failure',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        if (runtimeState === PROVIDER_STATES.COOLDOWN) {
+            return {
+                decision: 'skipped_cooldown',
+                reason: config.lastStateReason || '429 cooldown in effect',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        const concurrencyLimit = parseInt(config.concurrencyLimit || 0, 10);
+        const queueLimit = parseInt(config.queueLimit || 0, 10);
+        if (concurrencyLimit > 0 && state.activeCount >= concurrencyLimit) {
+            if (queueLimit > 0 && state.waitingCount >= queueLimit) {
+                return {
+                    decision: 'deprioritized_queue_full',
+                    reason: 'queue full, only selected as last resort',
+                    recentHttpStatus: recentStatus
+                };
+            }
+
+            return {
+                decision: 'deprioritized_busy',
+                reason: 'active concurrency is saturated, queued behind lighter nodes',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        if (!snapshot?.isSelectionCandidate) {
+            return {
+                decision: 'skipped_unselectable',
+                reason: 'state is not currently selectable',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        if (snapshot?.isPrimaryCandidate) {
+            return {
+                decision: 'selected_candidate',
+                reason: 'current top selectable node',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        if (runtimeState === PROVIDER_STATES.RISKY) {
+            return {
+                decision: 'deprioritized_risky',
+                reason: config.lastStateReason || 'risky nodes rank behind healthy nodes',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        if ((state.activeCount || 0) > 0 || (state.waitingCount || 0) > 0) {
+            return {
+                decision: 'deprioritized_busy',
+                reason: 'node is busy, other eligible nodes rank ahead',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        if ((config.usageCount || 0) > 0 || (config._lastSelectionSeq || 0) > 0) {
+            return {
+                decision: 'deprioritized_rotation',
+                reason: 'round-robin and usage penalties push it behind fresher nodes',
+                recentHttpStatus: recentStatus
+            };
+        }
+
+        return {
+            decision: 'eligible',
+            reason: 'eligible but not first in current ordering',
+            recentHttpStatus: recentStatus
+        };
+    }
+
+    getProviderSelectionSnapshot(providerType) {
+        const providers = this.providerStatus[providerType] || [];
+        if (providers.length === 0) {
+            return new Map();
+        }
+
+        const now = Date.now();
+        const minSeq = Math.min(...providers.map(p => p.config._lastSelectionSeq || 0));
+        const snapshotEntries = providers.map(providerStatus => {
+            const config = providerStatus.config;
+            const runtimeState = normalizeProviderState(config.state, inferProviderStateFromConfig(config, now));
+            const isSelectionCandidate = isProviderStateSelectable(runtimeState) && !config.isDisabled && !config.needsRefresh;
+            const schedulerScore = this._calculateNodeScore(providerStatus, now, minSeq);
+            const recoveryTime = config.scheduledRecoveryTime || config.cooldownUntil || null;
+            const cooldownRemainingMs = recoveryTime
+                ? Math.max(0, new Date(recoveryTime).getTime() - now)
+                : null;
+
+            return {
+                uuid: config.uuid,
+                runtimeState,
+                isSelectionCandidate,
+                schedulerScore,
+                recoveryTime,
+                cooldownRemainingMs,
+                penaltyBreakdown: this._buildSelectionPenaltyBreakdown(providerStatus, now, minSeq)
+            };
+        }).sort((a, b) => {
+            if (a.schedulerScore !== b.schedulerScore) {
+                return a.schedulerScore - b.schedulerScore;
+            }
+
+            return a.uuid.localeCompare(b.uuid);
+        });
+
+        const result = new Map();
+        let selectableRank = 0;
+
+        snapshotEntries.forEach((entry, index) => {
+            if (entry.isSelectionCandidate) {
+                selectableRank += 1;
+            }
+
+            const snapshot = {
+                schedulerRank: index + 1,
+                selectableRank: entry.isSelectionCandidate ? selectableRank : null,
+                isPrimaryCandidate: entry.isSelectionCandidate && selectableRank === 1,
+                isSelectionCandidate: entry.isSelectionCandidate,
+                schedulerScore: entry.schedulerScore,
+                recoveryTime: entry.recoveryTime,
+                cooldownRemainingMs: entry.cooldownRemainingMs,
+                penaltyBreakdown: entry.penaltyBreakdown
+            };
+
+            const providerStatus = providers.find(item => item.config.uuid === entry.uuid);
+            const decision = this._getSelectionDecision(providerStatus, snapshot, now);
+
+            result.set(entry.uuid, {
+                ...snapshot,
+                schedulerDecision: decision.decision,
+                schedulerDecisionReason: decision.reason,
+                recentHttpStatus: decision.recentHttpStatus
+            });
+        });
+
+        return result;
+    }
+
     /**
      * 获取指定类型的健康节点数量
      */

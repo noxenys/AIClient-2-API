@@ -54,3 +54,25 @@ export async function getRegistryItems(forceRefresh = false) {
     const registry = await fetchModelRegistry(forceRefresh);
     return registry.items || [];
 }
+
+function createFallbackModelEntry(modelId) {
+    return {
+        id: modelId,
+        displayName: modelId,
+        aliases: [],
+        primarySource: 'legacy'
+    };
+}
+
+export async function getProviderModelEntriesMap(forceRefresh = false) {
+    const registry = await fetchModelRegistry(forceRefresh);
+    const itemMap = new Map((registry.items || []).map(item => [item.id, item]));
+    const providerModelMap = registry.providerModelMap || {};
+    const entriesMap = {};
+
+    Object.entries(providerModelMap).forEach(([providerType, modelIds]) => {
+        entriesMap[providerType] = (Array.isArray(modelIds) ? modelIds : []).map(modelId => itemMap.get(modelId) || createFallbackModelEntry(modelId));
+    });
+
+    return entriesMap;
+}
