@@ -3,6 +3,11 @@
 import { showToast } from './utils.js';
 import { t } from './i18n.js';
 
+function buildAliasPath(provider, protocolPath) {
+    const normalizedProtocolPath = protocolPath.startsWith('/') ? protocolPath : `/${protocolPath}`;
+    return `/api/provider/${encodeURIComponent(provider)}${normalizedProtocolPath}`;
+}
+
 /**
  * 初始化路径路由示例功能
  */
@@ -122,8 +127,8 @@ function getAvailableRoutes() {
             provider: 'forward-api',
             name: 'NewAPI',
             paths: {
-                openai: '/forward-api/v1/chat/completions',
-                claude: '/forward-api/v1/messages'
+                openai: buildAliasPath('forward-api', '/v1/chat/completions'),
+                claude: buildAliasPath('forward-api', '/v1/messages')
             },
             description: t('dashboard.routing.official'),
             badge: t('dashboard.routing.official'),
@@ -133,8 +138,8 @@ function getAvailableRoutes() {
             provider: 'claude-custom',
             name: 'Claude Custom',
             paths: {
-                openai: '/claude-custom/v1/chat/completions',
-                claude: '/claude-custom/v1/messages'
+                openai: buildAliasPath('claude-custom', '/v1/chat/completions'),
+                claude: buildAliasPath('claude-custom', '/v1/messages')
             },
             description: t('dashboard.routing.official'),
             badge: t('dashboard.routing.official'),
@@ -144,8 +149,8 @@ function getAvailableRoutes() {
             provider: 'claude-kiro-oauth',
             name: 'Claude Kiro OAuth',
             paths: {
-                openai: '/claude-kiro-oauth/v1/chat/completions',
-                claude: '/claude-kiro-oauth/v1/messages'
+                openai: buildAliasPath('claude-kiro-oauth', '/v1/chat/completions'),
+                claude: buildAliasPath('claude-kiro-oauth', '/v1/messages')
             },
             description: t('dashboard.routing.free'),
             badge: t('dashboard.routing.free'),
@@ -155,8 +160,8 @@ function getAvailableRoutes() {
             provider: 'openai-custom',
             name: 'OpenAI Custom',
             paths: {
-                openai: '/openai-custom/v1/chat/completions',
-                claude: '/openai-custom/v1/messages'
+                openai: buildAliasPath('openai-custom', '/v1/chat/completions'),
+                claude: buildAliasPath('openai-custom', '/v1/messages')
             },
             description: t('dashboard.routing.official'),
             badge: t('dashboard.routing.official'),
@@ -166,8 +171,8 @@ function getAvailableRoutes() {
             provider: 'gemini-cli-oauth',
             name: 'Gemini CLI OAuth',
             paths: {
-                openai: '/gemini-cli-oauth/v1/chat/completions',
-                claude: '/gemini-cli-oauth/v1/messages'
+                openai: buildAliasPath('gemini-cli-oauth', '/v1/chat/completions'),
+                claude: buildAliasPath('gemini-cli-oauth', '/v1/messages')
             },
             description: t('dashboard.routing.oauth'),
             badge: t('dashboard.routing.oauth'),
@@ -177,8 +182,8 @@ function getAvailableRoutes() {
             provider: 'gemini-antigravity',
             name: 'Gemini Antigravity',
             paths: {
-                openai: '/gemini-antigravity/v1/chat/completions',
-                claude: '/gemini-antigravity/v1/messages'
+                openai: buildAliasPath('gemini-antigravity', '/v1/chat/completions'),
+                claude: buildAliasPath('gemini-antigravity', '/v1/messages')
             },
             description: t('dashboard.routing.experimental') || '实验性',
             badge: t('dashboard.routing.experimental') || '实验性',
@@ -188,8 +193,8 @@ function getAvailableRoutes() {
             provider: 'openai-qwen-oauth',
             name: 'Qwen OAuth',
             paths: {
-                openai: '/openai-qwen-oauth/v1/chat/completions',
-                claude: '/openai-qwen-oauth/v1/messages'
+                openai: buildAliasPath('openai-qwen-oauth', '/v1/chat/completions'),
+                claude: buildAliasPath('openai-qwen-oauth', '/v1/messages')
             },
             description: 'Qwen Code Plus',
             badge: t('dashboard.routing.oauth'),
@@ -199,8 +204,8 @@ function getAvailableRoutes() {
             provider: 'openai-iflow',
             name: 'iFlow OAuth',
             paths: {
-                openai: '/openai-iflow/v1/chat/completions',
-                claude: '/openai-iflow/v1/messages'
+                openai: buildAliasPath('openai-iflow', '/v1/chat/completions'),
+                claude: buildAliasPath('openai-iflow', '/v1/messages')
             },
             description: t('dashboard.routing.oauth'),
             badge: t('dashboard.routing.oauth'),
@@ -210,8 +215,8 @@ function getAvailableRoutes() {
             provider: 'openai-codex-oauth',
             name: 'OpenAI Codex OAuth',
             paths: {
-                openai: '/openai-codex-oauth/v1/chat/completions',
-                claude: '/openai-codex-oauth/v1/messages'
+                openai: buildAliasPath('openai-codex-oauth', '/v1/chat/completions'),
+                claude: buildAliasPath('openai-codex-oauth', '/v1/messages')
             },
             description: t('dashboard.routing.oauth'),
             badge: t('dashboard.routing.oauth'),
@@ -221,8 +226,8 @@ function getAvailableRoutes() {
             provider: 'openaiResponses-custom',
             name: 'OpenAI Responses',
             paths: {
-                openai: '/openaiResponses-custom/v1/responses',
-                claude: '/openaiResponses-custom/v1/messages'
+                openai: buildAliasPath('openaiResponses-custom', '/v1/responses'),
+                claude: buildAliasPath('openaiResponses-custom', '/v1/messages')
             },
             description: '结构化对话API',
             badge: 'Responses',
@@ -232,8 +237,8 @@ function getAvailableRoutes() {
             provider: 'grok-custom',
             name: 'Grok Reverse',
             paths: {
-                openai: '/grok-custom/v1/chat/completions',
-                claude: '/grok-custom/v1/messages'
+                openai: buildAliasPath('grok-custom', '/v1/chat/completions'),
+                claude: buildAliasPath('grok-custom', '/v1/messages')
             },
             description: t('dashboard.routing.free'),
             badge: t('dashboard.routing.free'),
@@ -468,8 +473,8 @@ function renderRoutingExamples(providerConfigs) {
                 provider: config.id,
                 name: config.name,
                 paths: {
-                    openai: `/${config.id}/v1/chat/completions`,
-                    claude: `/${config.id}/v1/messages`
+                    openai: buildAliasPath(config.id, '/v1/chat/completions'),
+                    claude: buildAliasPath(config.id, '/v1/messages')
                 },
                 description: baseRouteInfo ? baseRouteInfo.description : t('dashboard.routing.oauth'),
                 badge: baseRouteInfo ? baseRouteInfo.badge : t('dashboard.routing.oauth'),

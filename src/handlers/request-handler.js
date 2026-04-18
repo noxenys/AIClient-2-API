@@ -12,6 +12,7 @@ import { PROMPT_LOG_FILENAME } from '../core/config-manager.js';
 import { getPluginManager } from '../core/plugin-manager.js';
 import { randomUUID } from 'crypto';
 import { handleGrokAssetsProxy } from '../utils/grok-assets-proxy.js';
+import { matchProviderAliasRoute } from '../utils/provider-route-alias.js';
 
 /**
  * Generate a short unique request ID (8 characters)
@@ -64,6 +65,22 @@ export function createRequestHandler(config, providerPoolManager) {
             const requestUrl = new URL(req.url, `http://${req.headers.host}`);
             let path = requestUrl.pathname;
             const method = req.method;
+            const isAvailableProviderRoute = (providerType) => {
+                if (isRegisteredProvider(providerType)) {
+                    return true;
+                }
+
+                if (providerPoolManager?.providerStatus?.[providerType]) {
+                    return true;
+                }
+
+                if (currentConfig.providerPools?.[providerType]) {
+                    return true;
+                }
+
+                return false;
+            };
+            const providerAliasRoute = matchProviderAliasRoute(path, { isRegisteredProvider: isAvailableProviderRoute });
 
             try {
                 // Set CORS headers for all requests
@@ -77,6 +94,19 @@ export function createRequestHandler(config, providerPoolManager) {
                     res.writeHead(204);
                     res.end();
                     return;
+                }
+
+                if (providerAliasRoute.matched) {
+                    if (!providerAliasRoute.isValidProvider) {
+                        logger.warn(`[Config] Provider alias route requested unavailable provider: ${providerAliasRoute.providerType}`);
+                        handleError(res, { status: 400, message: `Provider ${providerAliasRoute.providerType} is not available.` }, currentConfig.MODEL_PROVIDER, null, req);
+                        return;
+                    }
+
+                    currentConfig.MODEL_PROVIDER = providerAliasRoute.providerType;
+                    path = providerAliasRoute.normalizedPath;
+                    requestUrl.pathname = path;
+                    logger.info(`[Config] MODEL_PROVIDER overridden by provider alias route to: ${currentConfig.MODEL_PROVIDER}`);
                 }
 
                 // Serve static files for UI (除了登录页面需要认证)
@@ -164,7 +194,7 @@ export function createRequestHandler(config, providerPoolManager) {
                 // Handle API requests
                 // Allow overriding MODEL_PROVIDER via request header
                 const modelProviderHeader = req.headers['model-provider'];
-                if (modelProviderHeader) {
+                if (modelProviderHeader && !providerAliasRoute.matched) {
                     if (isRegisteredProvider(modelProviderHeader)) {
                         currentConfig.MODEL_PROVIDER = modelProviderHeader;
                         logger.info(`[Config] MODEL_PROVIDER overridden by header to: ${currentConfig.MODEL_PROVIDER}`);

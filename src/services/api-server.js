@@ -332,6 +332,7 @@ async function startServer() {
         logger.info(`  • OpenAI-compatible: /v1/chat/completions, /v1/responses, /v1/models`);
         logger.info(`  • Gemini-compatible: /v1beta/models, /v1beta/models/{model}:generateContent`);
         logger.info(`  • Claude-compatible: /v1/messages`);
+        logger.info(`  • Provider alias: /api/provider/{provider}/v1/... and /api/provider/{provider}/v1beta/...`);
         logger.info(`  • Health check: /health`);
         logger.info(`  • UI Management Console: http://${CONFIG.HOST}:${CONFIG.SERVER_PORT}/`);
 

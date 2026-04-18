@@ -216,6 +216,23 @@ Go to the **"Configuration"** page, you can:
 *   ✅ Switch default model providers in real-time
 *   ✅ Monitor health status and real-time request logs
 
+#### 3.1 Provider Alias Routing (Recommended)
+
+When configuring client Base URLs, prefer the formal alias route prefix:
+
+```text
+http://localhost:3000/api/provider/{provider}
+```
+
+Common examples:
+
+- OpenAI-compatible: `/api/provider/openai-custom/v1/chat/completions`
+- Claude-compatible: `/api/provider/claude-custom/v1/messages`
+- Model list: `/api/provider/openai-custom/v1/models`
+- Gemini-native: `/api/provider/gemini-cli-oauth/v1beta/models`
+
+Legacy `/{provider}/v1/...` paths are still supported, but new integrations should prefer `/api/provider/{provider}/...`.
+
 #### 4. Local Environment Preparation (Non-Docker Users)
 If you are running directly on your local machine (via script or Node.js) and need to bypass TLS detection for services like Grok, please ensure:
 *   ✅ **Install Go Language**: Go to the [official Go website](https://go.dev/) to download and install (1.20+).

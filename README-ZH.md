@@ -214,6 +214,23 @@ docker compose up -d
 *   ✅ 实时切换默认模型提供商
 *   ✅ 监控健康状态和实时请求日志
 
+#### 3.1 Provider Alias 路由（推荐）
+
+对外给客户端配置 Base URL 时，推荐优先使用正式别名路由前缀：
+
+```text
+http://localhost:3000/api/provider/{provider}
+```
+
+常见示例：
+
+- OpenAI 兼容：`/api/provider/openai-custom/v1/chat/completions`
+- Claude 兼容：`/api/provider/claude-custom/v1/messages`
+- 模型列表：`/api/provider/openai-custom/v1/models`
+- Gemini 原生：`/api/provider/gemini-cli-oauth/v1beta/models`
+
+旧的 `/{provider}/v1/...` 路径仍然兼容，但新接入建议统一切到 `/api/provider/{provider}/...`。
+
 #### 4. 本地环境准备 (非 Docker 用户)
 如果您是在本地直接运行（通过脚本或 Node.js），且需要绕过 Grok 等服务的 TLS 检测，请务必：
 *   ✅ **安装 Go 语言环境**：前往 [Go 官网](https://go.dev/) 下载并安装 (1.20+)。
