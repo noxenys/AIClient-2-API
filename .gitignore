@@ -16,3 +16,28 @@ api-potluck-keys.json
 api-potluck-data.json
 model-usage-stats.json
 AGENTS.md
+
+# Local config/runtime data
+configs/config.json
+configs/provider_pools.json
+configs/custom_models.json
+configs/plugins.json
+configs/fetch_system_prompt.txt
+configs/input_system_prompt.txt
+configs/token-store.json
+configs/usage-cache.json
+configs/provider_catalog_cache.json
+configs/pwd
+configs/*_oauth_creds.json
+configs/*-auth-token.json
+configs/api-potluck-keys.json
+configs/api-potluck-data.json
+configs/model-usage-stats.json
+
+# Local verification artifacts
+logs/
+tmp-local-ui.out.log
+tmp-local-ui.err.log
+
+# Keep tests local only
+tests/

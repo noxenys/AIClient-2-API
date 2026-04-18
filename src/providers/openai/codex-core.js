@@ -9,12 +9,18 @@ import { getProviderPoolManager } from '../../services/service-manager.js';
 import { configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { MODEL_PROVIDER, formatExpiryLog } from '../../utils/common.js';
 import { getProxyConfigForProvider } from '../../utils/proxy-utils.js';
-import { getProviderModels } from '../provider-models.js';
+import { getProviderModels, normalizeModelIds } from '../provider-models.js';
 
 const baseModels = getProviderModels(MODEL_PROVIDER.CODEX_API);
 const fastModels = baseModels.map(m => `${m}-fast`);
 const CODEX_MODELS = [...new Set([...baseModels, ...fastModels])];
 const CODEX_VERSION = '0.118.0';
+
+function getAllowedCodexModels(config = {}) {
+    const configuredModels = normalizeModelIds(Array.isArray(config?.supportedModels) ? config.supportedModels : []);
+    const configuredFastModels = configuredModels.map(model => `${model}-fast`);
+    return normalizeModelIds([...CODEX_MODELS, ...configuredModels, ...configuredFastModels]);
+}
 
 /**
  * Codex API 服务类
@@ -164,9 +170,10 @@ export class CodexApiService {
             await this.initialize();
         }
 
+        const allowedModels = getAllowedCodexModels(this.config);
         let selectedModel = model;
-        if (!CODEX_MODELS.includes(model)) {
-            const defaultModel = CODEX_MODELS[0] || 'gpt-5';
+        if (!allowedModels.includes(model)) {
+            const defaultModel = allowedModels[0] || 'gpt-5';
             logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
             selectedModel = defaultModel;
         }
@@ -241,9 +248,10 @@ export class CodexApiService {
             await this.initialize();
         }
 
+        const allowedModels = getAllowedCodexModels(this.config);
         let selectedModel = model;
-        if (!CODEX_MODELS.includes(model)) {
-            const defaultModel = CODEX_MODELS[0] || 'gpt-5';
+        if (!allowedModels.includes(model)) {
+            const defaultModel = allowedModels[0] || 'gpt-5';
             logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
             selectedModel = defaultModel;
         }

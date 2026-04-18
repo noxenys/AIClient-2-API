@@ -173,6 +173,26 @@ export async function handleUIApiRequests(method, pathParam, req, res, currentCo
         return await providerApi.handleGetModelRegistry(req, res, currentConfig, providerPoolManager);
     }
 
+    if (method === 'GET' && pathParam === '/api/model-catalog') {
+        return await providerApi.handleGetModelCatalog(req, res, currentConfig, providerPoolManager);
+    }
+
+    if (method === 'POST' && pathParam === '/api/model-catalog/refresh') {
+        return await providerApi.handleRefreshModelCatalog(req, res, currentConfig, providerPoolManager);
+    }
+
+    const modelCatalogProviderRefreshMatch = pathParam.match(/^\/api\/model-catalog\/([^\/]+)\/refresh$/);
+    if (method === 'POST' && modelCatalogProviderRefreshMatch) {
+        const providerType = decodeURIComponent(modelCatalogProviderRefreshMatch[1]);
+        return await providerApi.handleRefreshModelCatalog(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
+    const modelCatalogProviderMatch = pathParam.match(/^\/api\/model-catalog\/([^\/]+)$/);
+    if (method === 'GET' && modelCatalogProviderMatch) {
+        const providerType = decodeURIComponent(modelCatalogProviderMatch[1]);
+        return await providerApi.handleGetModelCatalog(req, res, currentConfig, providerPoolManager, providerType);
+    }
+
     if (method === 'GET' && pathParam === '/api/provider-models') {
         return await providerApi.handleGetProviderModels(req, res, currentConfig, providerPoolManager);
     }

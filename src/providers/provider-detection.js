@@ -297,7 +297,7 @@ async function detectGrokModels(providerConfig = {}) {
     }
 }
 
-export async function detectAvailableModelsForProvider(providerType, tempConfig = {}) {
+export async function detectAvailableModelsForProvider(providerType, tempConfig = {}, options = {}) {
     if (providerType === 'openai-codex-oauth') {
         const codexModels = await inferCodexModels(tempConfig);
         if (codexModels.length > 0) {
@@ -313,13 +313,27 @@ export async function detectAvailableModelsForProvider(providerType, tempConfig 
         return normalizeModelIds(getProviderModels(providerType));
     }
 
-    const instanceKey = `${providerType}${tempConfig.uuid || 'detect-models'}`;
+    const serviceInstanceKey = options.instanceKey || `${providerType}${tempConfig.uuid || 'detect-models'}`;
+    const serviceInstanceUuid = options.instanceKey
+        ? (String(serviceInstanceKey).startsWith(providerType)
+            ? String(serviceInstanceKey).slice(providerType.length)
+            : String(serviceInstanceKey))
+        : (tempConfig.uuid || 'detect-models');
+    const adapterConfig = {
+        ...tempConfig,
+        MODEL_PROVIDER: tempConfig.MODEL_PROVIDER || providerType,
+        uuid: serviceInstanceUuid
+    };
     let models = [];
+    let serviceInstances = null;
 
     try {
-        const { getServiceAdapter, serviceInstances } = await import('./adapter.js');
-        delete serviceInstances[instanceKey];
-        const serviceAdapter = getServiceAdapter(tempConfig);
+        const adapterModule = await import('./adapter.js');
+        const { getServiceAdapter } = adapterModule;
+        serviceInstances = adapterModule.serviceInstances;
+
+        delete serviceInstances[serviceInstanceKey];
+        const serviceAdapter = getServiceAdapter(adapterConfig);
         if (typeof serviceAdapter.listModels !== 'function') {
             throw new Error(`Provider ${providerType} does not support model detection`);
         }
@@ -327,7 +341,9 @@ export async function detectAvailableModelsForProvider(providerType, tempConfig 
         const nativeModels = await serviceAdapter.listModels();
         models = extractModelIdsFromNativeList(nativeModels, providerType);
     } finally {
-        delete serviceInstances[instanceKey];
+        if (serviceInstances) {
+            delete serviceInstances[serviceInstanceKey];
+        }
     }
 
     return normalizeModelIds(models);
@@ -335,7 +351,10 @@ export async function detectAvailableModelsForProvider(providerType, tempConfig 
 
 export async function inferSupportedModelsFromProviderConfig(providerType, providerConfig = {}) {
     if (providerType === 'openai-codex-oauth') {
-        return inferCodexModels(providerConfig);
+        const codexModels = await inferCodexModels(providerConfig);
+        if (codexModels.length > 0) {
+            return codexModels;
+        }
     }
 
     if (providerType === 'grok-custom') {
@@ -346,5 +365,13 @@ export async function inferSupportedModelsFromProviderConfig(providerType, provi
         return normalizeModelIds(getProviderModels(providerType));
     }
 
-    return [];
+    try {
+        return await detectAvailableModelsForProvider(providerType, {
+            ...providerConfig,
+            MODEL_PROVIDER: providerType,
+            uuid: providerConfig.uuid || `${providerType}-infer-models`
+        });
+    } catch {
+        return [];
+    }
 }

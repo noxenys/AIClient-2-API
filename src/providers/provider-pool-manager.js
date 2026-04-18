@@ -9,6 +9,7 @@ import {
     getProviderModels,
     normalizeModelIds
 } from './provider-models.js';
+import { isModelCatalogRefreshError } from './provider-catalog-manager.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { ENDPOINT_TYPE } from '../utils/common.js';
 import { removeProvidersByPredicate, shouldPermanentlyDeleteProvider } from '../utils/provider-cleanup.js';
@@ -117,11 +118,48 @@ export class ProviderPoolManager {
         this.refreshTaskTimeoutMs = options.globalConfig?.REFRESH_TASK_TIMEOUT_MS ?? 60000; // 默认60秒刷新超时
         this.autoDeletingUuids = new Set();
         this.rateLimitCooldownMs = options.globalConfig?.RATE_LIMIT_COOLDOWN_MS ?? 15 * 60 * 1000;
+        this.modelCatalogManager = null;
         
         // 用于并发选点时的原子排序辅助（自增序列）
         this._selectionSequence = 0;
  
         this.initializeProviderStatus();
+    }
+
+    setModelCatalogManager(modelCatalogManager) {
+        this.modelCatalogManager = modelCatalogManager || null;
+    }
+
+    _getCatalogSupportedModels(providerType) {
+        return normalizeModelIds(this.modelCatalogManager?.getProviderModels(providerType) || []);
+    }
+
+    _getRuntimeSupportedModels(providerType) {
+        const runtimeProviders = this.providerStatus[providerType] || [];
+        const configuredModels = normalizeModelIds(
+            runtimeProviders.flatMap(providerStatus => getConfiguredSupportedModels(providerType, providerStatus?.config))
+        );
+
+        if (configuredModels.length > 0) {
+            return configuredModels;
+        }
+
+        const catalogModels = this._getCatalogSupportedModels(providerType);
+        if (catalogModels.length > 0) {
+            return catalogModels;
+        }
+
+        return getProviderModels(providerType);
+    }
+
+    _scheduleModelCatalogRefreshForError(providerType, errorMessage = null) {
+        if (!this.modelCatalogManager || !isModelCatalogRefreshError(errorMessage)) {
+            return;
+        }
+
+        this.modelCatalogManager.scheduleRefresh(providerType, {
+            reason: 'model_error'
+        });
     }
 
     /**
@@ -1421,7 +1459,7 @@ export class ProviderPoolManager {
                 const fallbackProtocol = getProtocolPrefix(currentType);
                 if (primaryProtocol !== fallbackProtocol) continue;
 
-                const supportedModels = getProviderModels(currentType);
+                const supportedModels = this._getRuntimeSupportedModels(currentType);
                 if (supportedModels.length > 0 && !supportedModels.includes(requestedModel)) continue;
             }
 
@@ -1474,7 +1512,7 @@ export class ProviderPoolManager {
                              const fallbackProtocol = getProtocolPrefix(fallbackType);
                              if (targetProtocol !== fallbackProtocol) continue;
                              
-                             const supportedModels = getProviderModels(fallbackType);
+                             const supportedModels = this._getRuntimeSupportedModels(fallbackType);
                              if (supportedModels.length > 0 && !supportedModels.includes(targetModel)) continue;
                              
                              try {
@@ -1565,7 +1603,7 @@ export class ProviderPoolManager {
                 }
 
                 // 检查 fallback 类型是否支持请求的模型
-                const supportedModels = getProviderModels(currentType);
+                const supportedModels = this._getRuntimeSupportedModels(currentType);
                 if (supportedModels.length > 0 && !supportedModels.includes(requestedModel)) {
                     this._log('debug', `Skipping fallback type ${currentType}: model ${requestedModel} not supported`);
                     continue;
@@ -1631,7 +1669,7 @@ export class ProviderPoolManager {
                              if (targetProtocol !== fallbackProtocol) continue;
                              
                              // 检查模型支持
-                             const supportedModels = getProviderModels(fallbackType);
+                             const supportedModels = this._getRuntimeSupportedModels(fallbackType);
                              if (supportedModels.length > 0 && !supportedModels.includes(targetModel)) continue;
                              
                              const fallbackSelectedConfig = await this.selectProvider(fallbackType, targetModel, options);
@@ -1740,8 +1778,14 @@ export class ProviderPoolManager {
                         getConfiguredSupportedModels(providerType, providerStatus.config)
                     )
                 );
+                const catalogModels = this._getCatalogSupportedModels(providerType);
                 let models = configuredSupportedModels.length > 0
                     ? normalizeModelIds([...configuredSupportedModels, ...customModelIds])
+                    : catalogModels.length > 0
+                        ? normalizeModelIds([
+                            ...catalogModels.filter(model => !customAliases.has(model)),
+                            ...customModelIds
+                        ])
                     : normalizeModelIds([
                         ...getProviderModels(providerType).filter(model => !customAliases.has(model)),
                         ...customModelIds
@@ -1922,6 +1966,8 @@ export class ProviderPoolManager {
                 provider.config.lastErrorMessage = errorMessage;
             }
 
+            this._scheduleModelCatalogRefreshForError(providerType, errorMessage);
+
             if (failureType === 'auth') {
                 this.markProviderUnhealthyImmediately(providerType, providerConfig, errorMessage);
                 return;
@@ -1970,6 +2016,8 @@ export class ProviderPoolManager {
             if (errorMessage) {
                 provider.config.lastErrorMessage = errorMessage;
             }
+
+            this._scheduleModelCatalogRefreshForError(providerType, errorMessage);
 
             this._transitionProviderState(providerType, provider, PROVIDER_STATES.BANNED, errorMessage, {
                 failureType: 'auth',
@@ -2072,6 +2120,8 @@ export class ProviderPoolManager {
             if (errorMessage) {
                 provider.config.lastErrorMessage = errorMessage;
             }
+
+            this._scheduleModelCatalogRefreshForError(providerType, errorMessage);
 
             // Set recovery time if provided
             if (recoveryTime) {

@@ -235,10 +235,6 @@ export function extractModelIdsFromNativeList(modelList, providerType) {
 }
 
 export function getConfiguredSupportedModels(providerType, providerConfig = {}) {
-    if (!usesManagedModelList(providerType)) {
-        return [];
-    }
-
     return normalizeModelIds(providerConfig?.supportedModels);
 }
 

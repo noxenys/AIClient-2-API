@@ -52,7 +52,6 @@ export const API_ACTIONS = {
 };
 
 import {
-    usesManagedModelList,
     getConfiguredSupportedModels,
     getCustomModelConfig,
     getCustomModelActualProvider,
@@ -1009,7 +1008,7 @@ export async function handleModelListRequest(req, res, service, endpointType, CO
                 ? pooledSupportedModels
                 : getConfiguredSupportedModels(toProvider, CONFIG);
 
-            if (usesManagedModelList(toProvider) && configuredSupportedModels.length > 0) {
+            if (configuredSupportedModels.length > 0) {
                 logger.info(`[ModelList] Returning configured supported models for ${toProvider}: ${configuredSupportedModels.join(', ')}`);
                 clientModelList = buildConfiguredModelListResponse(configuredSupportedModels, toProvider, endpointType);
             } else {

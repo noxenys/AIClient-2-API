@@ -3,6 +3,7 @@
 import { escapeHtml, showToast, getFieldLabel, getProviderTypeFields } from './utils.js';
 import { handleProviderPasswordToggle } from './event-handlers.js';
 import { t, getCurrentLanguage } from './i18n.js';
+import { refreshModels as refreshModelRegistryView } from './models-manager.js';
 import { getProviderRuntimeMetaItems, getProviderRuntimeState } from './provider-state-display.js';
 
 const MANAGED_MODEL_LIST_PROVIDERS = new Set([
@@ -27,8 +28,12 @@ let currentBusyCount = 0;
 let currentFilteredCount = 0;
 let currentTotalPages = 1;
 let currentProviderSummary = {};
+let currentProviderCatalog = null;
 let currentProviderFilters = getDefaultProviderFilters();
 let providerFetchSequence = 0;
+let providerCatalogFetchSequence = 0;
+let providerCatalogLoading = false;
+let providerCatalogRefreshing = false;
 let nodeSearchDebounceTimer = null;
 let currentViewMode = localStorage.getItem('providerViewMode') || 'list';
 
@@ -111,6 +116,71 @@ function formatDurationText(value) {
     }
 
     return parts.join(' ');
+}
+
+function formatCatalogStatusLabel(status = 'unknown') {
+    const normalizedStatus = String(status || 'unknown').trim().toLowerCase() || 'unknown';
+    const translationKey = `modal.provider.catalog.status.${normalizedStatus}`;
+    const translated = t(translationKey);
+    return translated === translationKey ? normalizedStatus : translated;
+}
+
+function formatCatalogSourceLabel(source = '') {
+    const normalizedSource = String(source || '').trim().toLowerCase();
+    if (!normalizedSource) {
+        return '-';
+    }
+
+    const translationKey = `modal.provider.catalog.source.${normalizedSource}`;
+    const translated = t(translationKey);
+    return translated === translationKey ? normalizedSource : translated;
+}
+
+function normalizeProviderCatalogPayload(payload = {}, providerType = '') {
+    return {
+        providerType,
+        updatedAt: payload?.updatedAt || null,
+        refreshIntervalMs: payload?.refreshIntervalMs ?? null,
+        filePath: payload?.filePath || '',
+        entry: payload?.providers?.[providerType] || null,
+        fetchError: null
+    };
+}
+
+function getCatalogEntryStatus(entry = null) {
+    if (!entry) {
+        return 'unknown';
+    }
+
+    if (entry.isStale && entry.status === 'ready') {
+        return 'stale';
+    }
+
+    return String(entry.status || 'unknown').trim().toLowerCase() || 'unknown';
+}
+
+function canRetryProviderCatalog(entry = null) {
+    if (!entry) {
+        return false;
+    }
+
+    const status = getCatalogEntryStatus(entry);
+    return status !== 'ready' || Boolean(entry.lastError);
+}
+
+function renderProviderCatalogModelPreview(models = []) {
+    const normalizedModels = normalizeModelList(models).slice(0, 8);
+    if (normalizedModels.length === 0) {
+        return '';
+    }
+
+    return `
+        <div class="provider-catalog-models">
+            ${normalizedModels.map(model => `
+                <span class="provider-catalog-model-tag" title="${escapeHtml(model)}">${escapeHtml(model)}</span>
+            `).join('')}
+        </div>
+    `;
 }
 
 function buildCurrentSelector() {
@@ -566,47 +636,276 @@ function formatProviderDateTime(value) {
     return Number.isFinite(date.getTime()) ? date.toLocaleString(getCurrentLanguage()) : String(value);
 }
 
+function renderProviderCatalogPanel(providerType = currentProviderType) {
+    const catalogState = currentProviderCatalog && currentProviderCatalog.providerType === providerType
+        ? currentProviderCatalog
+        : null;
+    const entry = catalogState?.entry || null;
+    const status = providerCatalogLoading && !entry
+        ? 'loading'
+        : getCatalogEntryStatus(entry);
+    const canRetry = canRetryProviderCatalog(entry);
+    const modelCount = Array.isArray(entry?.models) ? entry.models.length : 0;
+    const sampledCount = Array.isArray(entry?.sampledProviders) ? entry.sampledProviders.length : 0;
+    const lastRefreshReason = entry?.lastRefreshReason || '-';
+    const sourceLabel = formatCatalogSourceLabel(entry?.source);
+    const lastRefreshAt = entry?.refreshedAt ? formatProviderDateTime(entry.refreshedAt) : '-';
+    const staleAt = entry?.staleAt ? formatProviderDateTime(entry.staleAt) : '-';
+    const cacheUpdatedAt = catalogState?.updatedAt ? formatProviderDateTime(catalogState.updatedAt) : '-';
+    const isBusy = providerCatalogLoading || providerCatalogRefreshing;
+
+    return `
+        <div class="provider-catalog-card status-${escapeHtml(status)}">
+            <div class="provider-catalog-header">
+                <div class="provider-catalog-title">
+                    <div class="provider-catalog-title-text">
+                        <i class="fas fa-book-atlas"></i>
+                        <span>${escapeHtml(t('modal.provider.catalog.title'))}</span>
+                    </div>
+                    <span class="provider-catalog-status status-${escapeHtml(status)}">
+                        ${escapeHtml(formatCatalogStatusLabel(status))}
+                    </span>
+                </div>
+                <div class="provider-catalog-actions">
+                    <button class="btn btn-secondary"
+                            type="button"
+                            onclick="window.refreshProviderCatalogForType('${providerType}')"
+                            ${isBusy ? 'disabled' : ''}>
+                        <i class="fas ${isBusy ? 'fa-spinner fa-spin' : 'fa-rotate-right'}"></i>
+                        <span>${escapeHtml(providerCatalogRefreshing ? t('modal.provider.catalog.refreshing') : t('modal.provider.catalog.refresh'))}</span>
+                    </button>
+                    <button class="btn btn-secondary"
+                            type="button"
+                            onclick="window.retryProviderCatalogForType('${providerType}')"
+                            ${isBusy || !canRetry ? 'disabled' : ''}>
+                        <i class="fas fa-bullseye"></i>
+                        <span>${escapeHtml(t('modal.provider.catalog.retry'))}</span>
+                    </button>
+                </div>
+            </div>
+            <div class="provider-catalog-grid">
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.modelCount'))}</span>
+                    <span class="value">${modelCount}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.sampledNodes'))}</span>
+                    <span class="value">${sampledCount}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.source'))}</span>
+                    <span class="value">${escapeHtml(sourceLabel)}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.lastReason'))}</span>
+                    <span class="value">${escapeHtml(lastRefreshReason)}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.lastRefresh'))}</span>
+                    <span class="value">${escapeHtml(lastRefreshAt)}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.nextExpire'))}</span>
+                    <span class="value">${escapeHtml(staleAt)}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.cacheUpdated'))}</span>
+                    <span class="value">${escapeHtml(cacheUpdatedAt)}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.filePath'))}</span>
+                    <span class="value" title="${escapeHtml(catalogState?.filePath || '-')}">${escapeHtml(catalogState?.filePath || '-')}</span>
+                </div>
+            </div>
+            ${catalogState?.fetchError ? `
+                <div class="provider-catalog-warning">
+                    <i class="fas fa-triangle-exclamation"></i>
+                    <span>${escapeHtml(t('modal.provider.catalog.fetchFailed'))}: ${escapeHtml(catalogState.fetchError)}</span>
+                </div>
+            ` : ''}
+            ${entry?.lastError ? `
+                <div class="provider-catalog-warning">
+                    <i class="fas fa-circle-exclamation"></i>
+                    <span>${escapeHtml(t('modal.provider.catalog.error'))}: ${escapeHtml(entry.lastError)}</span>
+                </div>
+            ` : ''}
+            ${renderProviderCatalogModelPreview(entry?.models || [])}
+            ${!entry && !providerCatalogLoading ? `
+                <div class="provider-catalog-empty">
+                    <i class="fas fa-box-open"></i>
+                    <span>${escapeHtml(t('modal.provider.catalog.empty'))}</span>
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
+async function fetchProviderCatalogState(providerType, {
+    forceRefresh = false,
+    reason = 'manual_refresh',
+    silent = false
+} = {}) {
+    const requestSeq = ++providerCatalogFetchSequence;
+    if (forceRefresh) {
+        providerCatalogRefreshing = true;
+    } else {
+        providerCatalogLoading = true;
+    }
+
+    if (!currentProviderCatalog || currentProviderCatalog.providerType !== providerType) {
+        currentProviderCatalog = {
+            providerType,
+            updatedAt: null,
+            refreshIntervalMs: null,
+            filePath: '',
+            entry: null,
+            fetchError: null
+        };
+    } else {
+        currentProviderCatalog = {
+            ...currentProviderCatalog,
+            fetchError: null
+        };
+    }
+
+    renderCurrentProviderPage();
+
+    try {
+        const response = forceRefresh
+            ? await window.apiClient.post(`/model-catalog/${encodeURIComponent(providerType)}/refresh`, { reason })
+            : await window.apiClient.get(`/model-catalog/${encodeURIComponent(providerType)}`);
+        const payload = forceRefresh ? (response.catalog || response) : response;
+
+        if (requestSeq !== providerCatalogFetchSequence) {
+            return null;
+        }
+
+        currentProviderCatalog = normalizeProviderCatalogPayload(payload, providerType);
+
+        if (forceRefresh && !silent) {
+            showToast(t('common.success'), t('modal.provider.catalog.refresh.success', { type: providerType }), 'success');
+        }
+
+        if (forceRefresh) {
+            await refreshModelRegistryView();
+        }
+
+        return currentProviderCatalog;
+    } catch (error) {
+        if (requestSeq !== providerCatalogFetchSequence) {
+            return null;
+        }
+
+        currentProviderCatalog = {
+            ...(currentProviderCatalog || normalizeProviderCatalogPayload({}, providerType)),
+            providerType,
+            fetchError: error.message
+        };
+
+        if (!silent) {
+            showToast(
+                t('common.error'),
+                `${forceRefresh ? t('modal.provider.catalog.refresh.failed') : t('modal.provider.catalog.fetchFailed')}: ${error.message}`,
+                'error'
+            );
+        }
+
+        throw error;
+    } finally {
+        if (requestSeq === providerCatalogFetchSequence) {
+            providerCatalogLoading = false;
+            providerCatalogRefreshing = false;
+            renderCurrentProviderPage();
+        }
+    }
+}
+
+async function refreshProviderCatalogForType(providerType, options = {}) {
+    const retryFailed = options.retryFailed === true;
+
+    if (retryFailed && !canRetryProviderCatalog(currentProviderCatalog?.entry || null)) {
+        showToast(t('common.info'), t('modal.provider.catalog.retryNotNeeded'), 'info');
+        return;
+    }
+
+    const reason = retryFailed ? 'manual_retry_failed_catalog' : 'manual_refresh';
+
+    try {
+        showToast(
+            t('common.info'),
+            retryFailed ? t('modal.provider.catalog.retrying') : t('modal.provider.catalog.refreshing'),
+            'info'
+        );
+        await fetchProviderCatalogState(providerType, {
+            forceRefresh: true,
+            reason,
+            silent: true
+        });
+        showToast(
+            t('common.success'),
+            retryFailed
+                ? t('modal.provider.catalog.retry.success', { type: providerType })
+                : t('modal.provider.catalog.refresh.success', { type: providerType }),
+            'success'
+        );
+    } catch (error) {
+        console.error('Failed to refresh provider catalog:', error);
+        showToast(
+            t('common.error'),
+            `${retryFailed ? t('modal.provider.catalog.retry.failed') : t('modal.provider.catalog.refresh.failed')}: ${error.message}`,
+            'error'
+        );
+    }
+}
+
+async function retryProviderCatalogForType(providerType) {
+    return refreshProviderCatalogForType(providerType, { retryFailed: true });
+}
+
 function renderProviderSummaryPanel() {
     const summary = currentProviderSummary || {};
     const nextRecovery = summary.nextCooldownUntil ? formatProviderDateTime(summary.nextCooldownUntil) : '-';
     const topCandidate = summary.topCandidateUuid || '-';
 
     return `
-        <div class="provider-summary-grid">
-            <div class="provider-summary-item">
-                <span class="label">${translateOrFallback('modal.provider.totalAccounts', '总节点数')}</span>
-                <span class="value">${currentTotalCount}</span>
+        <div class="provider-summary-stack">
+            <div class="provider-summary-grid">
+                <div class="provider-summary-item">
+                    <span class="label">${translateOrFallback('modal.provider.totalAccounts', '总节点数')}</span>
+                    <span class="value">${currentTotalCount}</span>
+                </div>
+                <div class="provider-summary-item">
+                    <span class="label">${translateOrFallback('modal.provider.healthyAccounts', '健康节点')}</span>
+                    <span class="value">${currentHealthyCount}</span>
+                </div>
+                <div class="provider-summary-item">
+                    <span class="label">${translateOrFallback('modal.provider.selectableAccounts', '可选节点')}</span>
+                    <span class="value">${currentSelectableCount}</span>
+                </div>
+                <div class="provider-summary-item">
+                    <span class="label">${translateOrFallback('modal.provider.busyAccounts', '繁忙节点')}</span>
+                    <span class="value">${currentBusyCount}</span>
+                </div>
             </div>
-            <div class="provider-summary-item">
-                <span class="label">${translateOrFallback('modal.provider.healthyAccounts', '健康节点')}</span>
-                <span class="value">${currentHealthyCount}</span>
+            <div class="provider-summary-meta">
+                <span class="provider-summary-chip">
+                    <i class="fas fa-user-shield"></i>
+                    401/403: ${summary.authFailureCount || 0}
+                </span>
+                <span class="provider-summary-chip">
+                    <i class="fas fa-gauge-high"></i>
+                    429: ${summary.rateLimitFailureCount || 0}
+                </span>
+                <span class="provider-summary-chip">
+                    <i class="fas fa-ranking-star"></i>
+                    首选节点: ${escapeHtml(topCandidate)}
+                </span>
+                <span class="provider-summary-chip">
+                    <i class="fas fa-hourglass-half"></i>
+                    下次恢复: ${escapeHtml(nextRecovery)}
+                </span>
             </div>
-            <div class="provider-summary-item">
-                <span class="label">${translateOrFallback('modal.provider.selectableAccounts', '可选节点')}</span>
-                <span class="value">${currentSelectableCount}</span>
-            </div>
-            <div class="provider-summary-item">
-                <span class="label">${translateOrFallback('modal.provider.busyAccounts', '繁忙节点')}</span>
-                <span class="value">${currentBusyCount}</span>
-            </div>
-        </div>
-        <div class="provider-summary-meta">
-            <span class="provider-summary-chip">
-                <i class="fas fa-user-shield"></i>
-                401/403: ${summary.authFailureCount || 0}
-            </span>
-            <span class="provider-summary-chip">
-                <i class="fas fa-gauge-high"></i>
-                429: ${summary.rateLimitFailureCount || 0}
-            </span>
-            <span class="provider-summary-chip">
-                <i class="fas fa-ranking-star"></i>
-                首选节点: ${escapeHtml(topCandidate)}
-            </span>
-            <span class="provider-summary-chip">
-                <i class="fas fa-hourglass-half"></i>
-                下次恢复: ${escapeHtml(nextRecovery)}
-            </span>
+            ${renderProviderCatalogPanel()}
         </div>
     `;
 }
@@ -621,8 +920,11 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
 
     currentProviderFilters = getDefaultProviderFilters();
     currentProviderSummary = {};
+    currentProviderCatalog = null;
     currentSelectableCount = 0;
     currentBusyCount = 0;
+    providerCatalogLoading = false;
+    providerCatalogRefreshing = false;
 
     // 保存当前数据用于分页
     applyProviderPageData(data, initialSearchTerm);
@@ -692,6 +994,9 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
                     </button>
                     <button class="btn btn-secondary" onclick="window.runFilteredBatchAction('${providerType}', 'refresh-status')">
                         <i class="fas fa-heart-pulse"></i> 批量刷新状态
+                    </button>
+                    <button class="btn btn-secondary" onclick="window.runFilteredBatchAction('${providerType}', 'refresh-models')">
+                        <i class="fas fa-wand-magic-sparkles"></i> 批量识别模型
                     </button>
                     <button class="btn btn-secondary" onclick="window.showBatchUpdateModelsDialog('${providerType}')">
                         <i class="fas fa-cubes"></i> 批量改模型
@@ -777,6 +1082,7 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
     
     // 初始渲染
     renderCurrentProviderPage();
+    void fetchProviderCatalogState(providerType, { silent: true }).catch(() => {});
 }
 
 function renderProviderRuntimeState(provider = {}) {
@@ -1859,6 +2165,7 @@ async function saveProvider(uuid, event) {
         showToast(t('common.success'), t('modal.provider.save.success'), 'success');
         // 重新获取该提供商类型的最新配置
         await refreshProviderConfig(providerType);
+        await refreshModelRegistryView();
     } catch (error) {
         console.error('Failed to update provider:', error);
         showToast(t('common.error'), t('modal.provider.save.failed') + ': ' + error.message, 'error');
@@ -1886,6 +2193,7 @@ async function deleteProvider(uuid, event) {
         showToast(t('common.success'), t('modal.provider.delete.success'), 'success');
         // 重新获取最新配置
         await refreshProviderConfig(providerType);
+        await refreshModelRegistryView();
     } catch (error) {
         console.error('Failed to delete provider:', error);
         showToast(t('common.error'), t('modal.provider.delete.failed') + ': ' + error.message, 'error');
@@ -1898,10 +2206,20 @@ async function deleteProvider(uuid, event) {
  */
 async function refreshProviderConfig(providerType) {
     try {
-        const data = await fetchProviderPage(providerType, currentPage, nodeSearchTerm);
+        const modal = document.querySelector('.provider-modal');
+        const shouldRefreshCatalog = modal && modal.getAttribute('data-provider-type') === providerType;
+        const tasks = [
+            fetchProviderPage(providerType, currentPage, nodeSearchTerm)
+        ];
+
+        if (shouldRefreshCatalog) {
+            tasks.push(fetchProviderCatalogState(providerType, { silent: true }));
+        }
+
+        const results = await Promise.allSettled(tasks);
+        const data = results[0]?.status === 'fulfilled' ? results[0].value : null;
         
         // 如果当前显示的是该提供商类型的模态框，则更新模态框
-        const modal = document.querySelector('.provider-modal');
         if (data && modal && modal.getAttribute('data-provider-type') === providerType) {
             renderCurrentProviderPage();
         }
@@ -2011,6 +2329,7 @@ async function dedupeProviderNodes(providerType) {
         });
         showToast(t('common.success'), `去重完成，移除了 ${response.removedCount || 0} 个重复节点`, 'success');
         await refreshProviderConfig(providerType);
+        await refreshModelRegistryView();
     } catch (error) {
         console.error('Failed to dedupe providers:', error);
         showToast(t('common.error'), `去重失败: ${error.message}`, 'error');
@@ -2021,7 +2340,8 @@ async function runFilteredBatchAction(providerType, action) {
     const actionLabels = {
         enable: '批量启用',
         disable: '批量禁用',
-        'refresh-status': '批量刷新状态'
+        'refresh-status': '批量刷新状态',
+        'refresh-models': '批量识别模型'
     };
     const actionLabel = actionLabels[action] || action;
 
@@ -2035,13 +2355,16 @@ async function runFilteredBatchAction(providerType, action) {
             selector: buildCurrentSelector()
         });
 
-        if (action === 'refresh-status') {
+        if (action === 'refresh-status' || action === 'refresh-models') {
             showToast(t('common.success'), `${actionLabel}完成，成功 ${response.successCount || 0}，失败 ${response.failCount || 0}`, 'success');
         } else {
             showToast(t('common.success'), `${actionLabel}完成，影响 ${response.targetCount || 0} 个节点`, 'success');
         }
 
         await refreshProviderConfig(providerType);
+        if (action === 'refresh-models') {
+            await refreshModelRegistryView();
+        }
     } catch (error) {
         console.error(`Failed to ${action}:`, error);
         showToast(t('common.error'), `${actionLabel}失败: ${error.message}`, 'error');
@@ -2097,6 +2420,7 @@ function showBatchImportProvidersDialog(providerType) {
 
             showToast(t('common.success'), `导入完成，新增 ${response.importedCount || 0}，去重移除 ${response.removedCount || 0}`, 'success');
             await refreshProviderConfig(providerType);
+            await refreshModelRegistryView();
         }
     });
 }
@@ -2144,6 +2468,7 @@ function showBatchUpdateModelsDialog(providerType) {
 
             showToast(t('common.success'), `已批量更新 ${response.targetCount || 0} 个节点的模型配置`, 'success');
             await refreshProviderConfig(providerType);
+            await refreshModelRegistryView();
         }
     });
 }
@@ -2426,6 +2751,7 @@ async function addProvider(providerType) {
         }
         // 重新获取最新配置数据
         await refreshProviderConfig(providerType);
+        await refreshModelRegistryView();
     } catch (error) {
         console.error('Failed to add provider:', error);
         showToast(t('common.error'), t('modal.provider.add.failed') + ': ' + error.message, 'error');
@@ -2801,6 +3127,8 @@ export {
     showBatchImportProvidersDialog,
     showBatchUpdateModelsDialog,
     openSupportedModelsPicker,
+    refreshProviderCatalogForType,
+    retryProviderCatalogForType,
     loadModelsForProviderType,
     renderNotSupportedModelsSelector,
     goToProviderPage,
@@ -2829,5 +3157,7 @@ window.runFilteredBatchAction = runFilteredBatchAction;
 window.showBatchImportProvidersDialog = showBatchImportProvidersDialog;
 window.showBatchUpdateModelsDialog = showBatchUpdateModelsDialog;
 window.openSupportedModelsPicker = openSupportedModelsPicker;
+window.refreshProviderCatalogForType = refreshProviderCatalogForType;
+window.retryProviderCatalogForType = retryProviderCatalogForType;
 window.goToProviderPage = goToProviderPage;
 window.refreshProviderUuid = refreshProviderUuid;

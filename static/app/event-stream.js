@@ -16,6 +16,12 @@ const debouncedConfigRefresh = createDebouncedTask(() => {
     }
 }, 300);
 
+const debouncedModelRegistryRefresh = createDebouncedTask(() => {
+    if (typeof window.refreshModels === 'function') {
+        window.refreshModels();
+    }
+}, 400);
+
 /**
  * Server-Sent Events初始化
  */
@@ -62,6 +68,11 @@ function initEventStream() {
     newEventSource.addEventListener('config_update', (event) => {
         const data = JSON.parse(event.data);
         handleConfigUpdate(data);
+    });
+
+    newEventSource.addEventListener('model_catalog_update', (event) => {
+        const data = JSON.parse(event.data);
+        handleModelCatalogUpdate(data);
     });
 }
 
@@ -137,6 +148,21 @@ function handleProviderUpdate(data) {
             debouncedProviderRefresh(data);
         }
     }
+}
+
+function handleModelCatalogUpdate(data) {
+    if (!data?.providerType) {
+        return;
+    }
+
+    const modal = document.querySelector('.provider-modal');
+    if (modal && modal.getAttribute('data-provider-type') === data.providerType) {
+        if (typeof refreshProviderConfig === 'function') {
+            refreshProviderConfig(data.providerType);
+        }
+    }
+
+    debouncedModelRegistryRefresh(data);
 }
 
 // 导入工具函数

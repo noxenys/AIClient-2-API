@@ -28,6 +28,7 @@ import { removeProvidersByPredicate, shouldPermanentlyDeleteProvider } from '../
 import { inferProviderStateFromConfig, isProviderStateSelectable } from '../utils/provider-state.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, invalidateServiceAdapter } from '../providers/adapter.js';
+import { getProviderCatalogManager } from '../services/service-manager.js';
 
 const BLOCKED_SELECTION_SCORE = 1e18;
 const DEFAULT_BATCH_IMPORT_MODE = 'append';
@@ -588,11 +589,24 @@ function loadProviderPools(currentConfig, providerPoolManager) {
 
 function getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, providerTypes = []) {
     const providerPools = loadProviderPools(currentConfig, providerPoolManager);
-    return buildModelRegistryPayload({
-        providerTypes,
-        providerPools,
-        customModels: currentConfig?.customModels || []
-    });
+    const providerCatalogManager = getProviderCatalogManager();
+    const catalogProviderModels = providerCatalogManager?.getProviderModelMap(providerTypes) || {};
+
+    return {
+        ...buildModelRegistryPayload({
+            providerTypes,
+            providerPools,
+            catalogProviderModels,
+            customModels: currentConfig?.customModels || []
+        }),
+        catalog: providerCatalogManager?.getCatalogPayload(providerTypes) || {
+            version: 1,
+            updatedAt: null,
+            refreshIntervalMs: null,
+            filePath: currentConfig?.PROVIDER_CATALOG_CACHE_FILE_PATH || 'configs/provider_catalog_cache.json',
+            providers: {}
+        }
+    };
 }
 
 function parsePositiveInteger(value, fallback, { min = 1, max = 200 } = {}) {
@@ -638,13 +652,24 @@ function persistProviderStatusToFile(currentConfig, providerPoolManager) {
     return filePath;
 }
 
-function persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools) {
+function persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools, changedProviderTypes = []) {
     const filePath = getProviderPoolsFilePath(currentConfig);
     writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
 
     if (providerPoolManager) {
         providerPoolManager.providerPools = providerPools;
         providerPoolManager.initializeProviderStatus();
+        const refreshTypes = [...new Set(
+            (Array.isArray(changedProviderTypes) ? changedProviderTypes : [changedProviderTypes])
+                .map(providerType => String(providerType || '').trim())
+                .filter(Boolean)
+        )];
+        refreshTypes.forEach(providerType => {
+            providerPoolManager.modelCatalogManager?.scheduleRefresh(providerType, {
+                reason: 'provider_pool_changed',
+                delayMs: 0
+            });
+        });
     }
 
     return filePath;
@@ -740,6 +765,110 @@ function applyBatchModelsPatch(provider, payload = {}) {
     }
 }
 
+function clampConcurrency(value, {
+    fallback = 4,
+    min = 1,
+    max = 10
+} = {}) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+
+    return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+async function mapWithConcurrency(items = [], concurrency = 4, mapper) {
+    const normalizedItems = Array.isArray(items) ? items : [];
+    const limit = clampConcurrency(concurrency);
+    const results = new Array(normalizedItems.length);
+    let nextIndex = 0;
+
+    async function worker() {
+        while (true) {
+            const currentIndex = nextIndex++;
+            if (currentIndex >= normalizedItems.length) {
+                return;
+            }
+
+            results[currentIndex] = await mapper(normalizedItems[currentIndex], currentIndex);
+        }
+    }
+
+    const workers = Array.from({ length: Math.min(limit, normalizedItems.length || 1) }, () => worker());
+    await Promise.all(workers);
+    return results;
+}
+
+function inferModelDetectionSource(providerType, providerConfig = {}) {
+    if (providerType === 'openai-codex-oauth') {
+        return (providerConfig.CODEX_PLAN_TYPE || providerConfig.plan_type || providerConfig.CODEX_OAUTH_CREDS_FILE_PATH)
+            ? 'plan_inference'
+            : 'builtin_catalog';
+    }
+
+    if (providerType === 'grok-custom') {
+        return providerConfig.GROK_COOKIE_TOKEN ? 'grok_modes' : 'builtin_catalog';
+    }
+
+    return 'native_api';
+}
+
+function applyDetectedModelsPatch(providerType, provider, models = [], {
+    source = 'native_api',
+    detectionError = null,
+    detectedAt = new Date().toISOString()
+} = {}) {
+    const normalizedModels = normalizeModelIds(models);
+
+    if (normalizedModels.length > 0) {
+        provider.supportedModels = normalizedModels;
+    }
+
+    provider.supportedModelsUpdatedAt = detectedAt;
+    provider.supportedModelsSource = source;
+    provider.supportedModelsDetectionStatus = detectionError ? 'error' : 'success';
+    provider.supportedModelsDetectionError = detectionError || null;
+
+    if (normalizedModels.length > 0 && !provider.checkModelName) {
+        provider.checkModelName = normalizedModels.find(model =>
+            model.includes('flash') || model.includes('mini') || model.includes('haiku') || model.includes('small')
+        ) || normalizedModels[0];
+    }
+
+    return {
+        providerType,
+        uuid: provider.uuid,
+        count: normalizedModels.length,
+        models: normalizedModels,
+        source,
+        detectedAt,
+        success: !detectionError,
+        error: detectionError || null
+    };
+}
+
+async function detectModelsForProviderNode(currentConfig, providerType, provider, draftConfig = null) {
+    const effectiveProvider = provider || {};
+    const detectionUuid = `${effectiveProvider.uuid || generateUUID()}-detect-models`;
+    const tempConfig = {
+        ...currentConfig,
+        ...effectiveProvider,
+        ...(draftConfig || {}),
+        MODEL_PROVIDER: providerType,
+        uuid: detectionUuid
+    };
+
+    const models = await detectAvailableModelsForProvider(providerType, tempConfig, {
+        instanceKey: `${providerType}${detectionUuid}`
+    });
+
+    return {
+        models,
+        source: inferModelDetectionSource(providerType, tempConfig)
+    };
+}
+
 function isAuthHealthCheckError(errorMessage = '') {
     return /\b(401|403)\b/.test(errorMessage) ||
         /\b(Unauthorized|Forbidden|AccessDenied|InvalidToken|ExpiredToken)\b/i.test(errorMessage);
@@ -749,17 +878,13 @@ async function runProviderHealthCheck(providerPoolManager, providerType, provide
     const providerConfig = providerStatus.config;
 
     try {
-        // 对于管理模型列表的提供商，如果配置了支持的模型，从中挑选一个用于健康检查
         let checkModelName = providerConfig.checkModelName;
-        if (!checkModelName && usesManagedModelList(providerType)) {
-            const supportedModels = getConfiguredSupportedModels(providerType, providerConfig);
-            if (supportedModels.length > 0) {
-                // 优先挑选常见的/轻量级的模型，或者直接取第一个
-                checkModelName = supportedModels.find(m =>
-                    m.includes('flash') || m.includes('mini') || m.includes('3.5') || m.includes('small')
-                ) || supportedModels[0];
-                logger.info(`[UI API] Selected model ${checkModelName} for health check of managed provider ${providerConfig.uuid}`);
-            }
+        const supportedModels = getConfiguredSupportedModels(providerType, providerConfig);
+        if (!checkModelName && supportedModels.length > 0) {
+            checkModelName = supportedModels.find(m =>
+                m.includes('flash') || m.includes('mini') || m.includes('3.5') || m.includes('small')
+            ) || supportedModels[0];
+            logger.info(`[UI API] Selected model ${checkModelName} for health check of provider ${providerConfig.uuid}`);
         }
 
         const healthResult = await providerPoolManager._checkProviderHealth(providerType, {
@@ -1073,7 +1198,7 @@ export async function handleBatchImportProviders(req, res, currentConfig, provid
         }
 
         providerPools[providerType] = nextProviders;
-        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools);
+        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools, providerType);
 
         broadcastEvent('config_update', {
             action: 'batch_import',
@@ -1116,7 +1241,7 @@ export async function handleDedupeProviders(req, res, currentConfig, providerPoo
         const { dedupedProviders, removedProviders } = dedupeProviders(providerType, currentProviders, strategy);
 
         providerPools[providerType] = dedupedProviders;
-        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools);
+        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools, providerType);
 
         broadcastEvent('config_update', {
             action: 'batch_dedupe',
@@ -1214,6 +1339,49 @@ export async function handleBatchProviderAction(req, res, currentConfig, provide
             return true;
         }
 
+        if (action === 'refresh-models') {
+            const concurrency = clampConcurrency(body.concurrency, { fallback: 4 });
+            const results = await mapWithConcurrency(targets, concurrency, async provider => {
+                try {
+                    const { models, source } = await detectModelsForProviderNode(currentConfig, providerType, provider);
+                    return applyDetectedModelsPatch(providerType, provider, models, {
+                        source
+                    });
+                } catch (error) {
+                    return applyDetectedModelsPatch(providerType, provider, provider.supportedModels || [], {
+                        source: provider.supportedModelsSource || 'native_api',
+                        detectionError: error.message || String(error)
+                    });
+                }
+            });
+
+            providerPools[providerType] = providers;
+            const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools, providerType);
+
+            broadcastEvent('config_update', {
+                action: 'batch_refresh_models',
+                filePath,
+                providerType,
+                targetCount: targetUuids.length,
+                successCount: results.filter(result => result.success).length,
+                failCount: results.filter(result => !result.success).length,
+                timestamp: new Date().toISOString()
+            });
+
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                providerType,
+                action,
+                concurrency,
+                targetCount: targetUuids.length,
+                successCount: results.filter(result => result.success).length,
+                failCount: results.filter(result => !result.success).length,
+                results
+            }));
+            return true;
+        }
+
         targets.forEach(provider => {
             if (action === 'enable') {
                 provider.isDisabled = false;
@@ -1261,7 +1429,7 @@ export async function handleBatchProviderAction(req, res, currentConfig, provide
         }
 
         providerPools[providerType] = providers;
-        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools);
+        const filePath = persistProviderPoolsToFile(currentConfig, providerPoolManager, providerPools, providerType);
 
         broadcastEvent('config_update', {
             action: 'batch_action',
@@ -1374,6 +1542,64 @@ export async function handleGetModelRegistry(req, res, currentConfig, providerPo
     }
 }
 
+export async function handleGetModelCatalog(req, res, currentConfig, providerPoolManager, providerType = null) {
+    try {
+        const providerCatalogManager = getProviderCatalogManager();
+        const payload = providerCatalogManager?.getCatalogPayload(providerType ? [providerType] : null) || {
+            version: 1,
+            updatedAt: null,
+            refreshIntervalMs: currentConfig?.PROVIDER_CATALOG_REFRESH_INTERVAL_MS || null,
+            filePath: currentConfig?.PROVIDER_CATALOG_CACHE_FILE_PATH || 'configs/provider_catalog_cache.json',
+            providers: {}
+        };
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+        return true;
+    } catch (error) {
+        logger.error('[UI API] Failed to load model catalog:', error.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    }
+}
+
+export async function handleRefreshModelCatalog(req, res, currentConfig, providerPoolManager, providerType = null) {
+    try {
+        const body = await getRequestBody(req).catch(() => ({}));
+        const providerCatalogManager = getProviderCatalogManager();
+        if (!providerCatalogManager) {
+            throw new Error('Model catalog manager is not initialized');
+        }
+
+        const requestedTypes = providerType
+            ? [providerType]
+            : (Array.isArray(body?.providerTypes) ? body.providerTypes : null);
+        const reason = String(body?.reason || 'manual_refresh').trim() || 'manual_refresh';
+        const results = requestedTypes && requestedTypes.length === 1
+            ? [await providerCatalogManager.refreshProviderCatalog(requestedTypes[0], { reason })]
+            : await providerCatalogManager.refreshAllCatalogs({
+                providerTypes: requestedTypes,
+                reason
+            });
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+            success: true,
+            providerTypes: requestedTypes || providerCatalogManager.getKnownProviderTypes(),
+            refreshedCount: results.length,
+            results,
+            catalog: providerCatalogManager.getCatalogPayload(requestedTypes)
+        }));
+        return true;
+    } catch (error) {
+        logger.error('[UI API] Failed to refresh model catalog:', error.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    }
+}
+
 /**
  * Detect available models for a specific provider node.
  */
@@ -1385,18 +1611,8 @@ export async function handleDetectProviderModels(req, res, currentConfig, provid
         const providerPools = loadProviderPools(currentConfig, providerPoolManager);
         const providers = providerPools[providerType] || [];
         const existingProvider = providers.find(provider => provider.uuid === providerUuid) || {};
-
-        const detectionUuid = `${providerUuid}-detect-models`;
-        const instanceKey = `${providerType}${detectionUuid}`;
-        const tempConfig = {
-            ...currentConfig,
-            ...existingProvider,
-            ...draftConfig,
-            MODEL_PROVIDER: providerType,
-            uuid: detectionUuid
-        };
-
-        const models = await detectAvailableModelsForProvider(providerType, tempConfig, { instanceKey });
+        const detectedAt = new Date().toISOString();
+        const { models, source } = await detectModelsForProviderNode(currentConfig, providerType, existingProvider, draftConfig);
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -1405,6 +1621,8 @@ export async function handleDetectProviderModels(req, res, currentConfig, provid
             uuid: providerUuid,
             count: models.length,
             models,
+            source,
+            detectedAt,
             selectedModels: getConfiguredSupportedModels(providerType, existingProvider)
         }));
         return true;
@@ -1468,11 +1686,14 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
         
         // 过滤掉脱敏字段
         const filteredConfig = filterMaskedData(providerConfig);
-        if (usesManagedModelList(providerType)) {
+        if (Object.prototype.hasOwnProperty.call(filteredConfig, 'supportedModels')) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
+        }
+        if (usesManagedModelList(providerType)) {
             filteredConfig.notSupportedModels = [];
         }
         providerPools[providerType].push(filteredConfig);
+        const storedProvider = providerPools[providerType][providerPools[providerType].length - 1];
 
         // Save to file
         writeFileSync(filePath, JSON.stringify(providerPools, null, 2), 'utf-8');
@@ -1482,6 +1703,10 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
         if (providerPoolManager) {
             providerPoolManager.providerPools = providerPools;
             providerPoolManager.initializeProviderStatus();
+            providerPoolManager.modelCatalogManager?.scheduleRefresh(providerType, {
+                reason: 'provider_added',
+                delayMs: 0
+            });
         }
 
         // 广播更新事件
@@ -1489,7 +1714,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
             action: 'add',
             filePath: filePath,
             providerType,
-            providerConfig: sanitizeProviderData(providerConfig),
+            providerConfig: sanitizeProviderData(storedProvider),
             timestamp: new Date().toISOString()
         });
 
@@ -1497,7 +1722,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
         broadcastEvent('provider_update', {
             action: 'add',
             providerType,
-            providerConfig: sanitizeProviderData(providerConfig),
+            providerConfig: sanitizeProviderData(storedProvider),
             timestamp: new Date().toISOString()
         });
 
@@ -1505,7 +1730,7 @@ async function _handleAddProvider(req, res, currentConfig, providerPoolManager) 
         res.end(JSON.stringify({
             success: true,
             message: 'Provider added successfully',
-            provider: sanitizeProviderData(providerConfig, true),
+            provider: sanitizeProviderData(storedProvider, true),
             providerType
         }));
         return true;
@@ -1567,8 +1792,10 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
         
         // 过滤掉传入配置中的脱敏占位符，避免覆盖真实数据
         const filteredConfig = filterMaskedData(providerConfig);
-        if (usesManagedModelList(providerType)) {
+        if (Object.prototype.hasOwnProperty.call(filteredConfig, 'supportedModels')) {
             filteredConfig.supportedModels = normalizeModelIds(filteredConfig.supportedModels);
+        }
+        if (usesManagedModelList(providerType)) {
             filteredConfig.notSupportedModels = [];
         }
         
@@ -1593,6 +1820,10 @@ async function _handleUpdateProvider(req, res, currentConfig, providerPoolManage
         if (providerPoolManager) {
             providerPoolManager.providerPools = providerPools;
             providerPoolManager.initializeProviderStatus();
+            providerPoolManager.modelCatalogManager?.scheduleRefresh(providerType, {
+                reason: 'provider_updated',
+                delayMs: 0
+            });
         }
 
         // 广播更新事件
@@ -1672,6 +1903,10 @@ async function _handleDeleteProvider(req, res, currentConfig, providerPoolManage
         if (providerPoolManager) {
             providerPoolManager.providerPools = providerPools;
             providerPoolManager.initializeProviderStatus();
+            providerPoolManager.modelCatalogManager?.scheduleRefresh(providerType, {
+                reason: 'provider_deleted',
+                delayMs: 0
+            });
         }
 
         // 广播更新事件
@@ -1929,6 +2164,10 @@ export async function handleDeleteUnhealthyProviders(req, res, currentConfig, pr
         if (providerPoolManager) {
             providerPoolManager.providerPools = providerPools;
             providerPoolManager.initializeProviderStatus();
+            providerPoolManager.modelCatalogManager?.scheduleRefresh(providerType, {
+                reason: 'provider_deleted_invalid',
+                delayMs: 0
+            });
         }
 
         deletedProviders.forEach(provider => invalidateServiceAdapter(providerType, provider.uuid));
@@ -2026,6 +2265,10 @@ export async function handleRefreshUnhealthyUuids(req, res, currentConfig, provi
         if (providerPoolManager) {
             providerPoolManager.providerPools = providerPools;
             providerPoolManager.initializeProviderStatus();
+            providerPoolManager.modelCatalogManager?.scheduleRefresh(providerType, {
+                reason: 'refresh_unhealthy_uuids',
+                delayMs: 0
+            });
         }
 
         // 广播更新事件
@@ -2376,6 +2619,12 @@ export async function handleQuickLinkProvider(req, res, currentConfig, providerP
             if (providerPoolManager) {
                 providerPoolManager.providerPools = providerPools;
                 providerPoolManager.initializeProviderStatus();
+                [...new Set(linkedProviders.map(item => item.providerType))].forEach(type => {
+                    providerPoolManager.modelCatalogManager?.scheduleRefresh(type, {
+                        reason: 'quick_link_batch',
+                        delayMs: 0
+                    });
+                });
             }
 
             // Broadcast update events
@@ -2469,6 +2718,10 @@ export async function handleRefreshProviderUuid(req, res, currentConfig, provide
         if (providerPoolManager) {
             providerPoolManager.providerPools = providerPools;
             providerPoolManager.initializeProviderStatus();
+            providerPoolManager.modelCatalogManager?.scheduleRefresh(providerType, {
+                reason: 'provider_uuid_refreshed',
+                delayMs: 0
+            });
         }
 
         // 广播更新事件

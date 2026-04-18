@@ -78,6 +78,11 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         PROVIDER_POOLS_FILE_PATH: null, // 新增号池配置文件路径
         MAX_ERROR_COUNT: 10, // 提供商最大错误次数
         CUSTOM_MODELS_FILE_PATH: null, // 自定义模型配置文件路径
+        PROVIDER_CATALOG_CACHE_FILE_PATH: 'configs/provider_catalog_cache.json',
+        PROVIDER_CATALOG_REFRESH_INTERVAL_MS: 6 * 60 * 60 * 1000,
+        PROVIDER_CATALOG_STARTUP_REFRESH: true,
+        PROVIDER_CATALOG_SAMPLE_LIMIT: 3,
+        PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS: 5000,
         SYSTEM_PROMPT_REPLACEMENTS: [], // 系统提示词内容替换规则，例如: [{"old": "AI", "new": "Bot"}, {"old": "OpenAI", "new": "Gemini"}]
         SCHEDULED_HEALTH_CHECK: {
             enabled: false,

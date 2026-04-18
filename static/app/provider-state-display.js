@@ -179,6 +179,30 @@ export function getProviderRuntimeMetaItems(provider = {}, {
         );
     }
 
+    if (provider.supportedModelsSource) {
+        pushItem(
+            'supportedModelsSource',
+            translateLabel(t, 'modal.provider.supportedModelsSource', 'Model source'),
+            provider.supportedModelsSource
+        );
+    }
+
+    if (provider.supportedModelsUpdatedAt) {
+        pushItem(
+            'supportedModelsUpdatedAt',
+            translateLabel(t, 'modal.provider.supportedModelsUpdatedAt', 'Model detected at'),
+            formatDateTime(provider.supportedModelsUpdatedAt)
+        );
+    }
+
+    if (provider.supportedModelsDetectionError) {
+        pushItem(
+            'supportedModelsDetectionError',
+            translateLabel(t, 'modal.provider.supportedModelsDetectionError', 'Model detection error'),
+            provider.supportedModelsDetectionError
+        );
+    }
+
     if (Number(provider.consecutiveFailures || 0) > 0) {
         pushItem(
             'consecutiveFailures',

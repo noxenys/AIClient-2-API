@@ -9,7 +9,7 @@ import * as https from 'https';
 import open from 'open';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'node:crypto';
-import { getProviderModels } from '../provider-models.js';
+import { getProviderModels, normalizeModelIds } from '../provider-models.js';
 import { handleQwenOAuth } from '../../auth/oauth-handlers.js';
 import { configureAxiosProxy, configureTLSSidecar } from '../../utils/proxy-utils.js';
 import { isRetryableNetworkError, MODEL_PROVIDER, formatExpiryLog } from '../../utils/common.js';
@@ -24,6 +24,11 @@ const QWEN_MODEL_LIST = QWEN_MODELS.map(id => ({
     id: id,
     name: id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
 }));
+
+function getAllowedQwenModels(config = {}) {
+    const configuredModels = normalizeModelIds(Array.isArray(config?.supportedModels) ? config.supportedModels : []);
+    return normalizeModelIds([...QWEN_MODELS, ...configuredModels]);
+}
 
 const TOKEN_REFRESH_BUFFER_MS = 30 * 1000;
 const LOCK_TIMEOUT_MS = 10000;
@@ -705,9 +710,10 @@ export class QwenApiService {
             let processedBody = ensureQwenSystemMessage(body);
 
             // 检查模型是否存在于列表中
-            if (processedBody.model && !QWEN_MODELS.includes(processedBody.model)) {
-                logger.warn(`[QwenApiService] Model '${processedBody.model}' not found in supported list. Using default: '${QWEN_MODELS[0]}'`);
-                processedBody.model = QWEN_MODELS[0];
+            const allowedModels = getAllowedQwenModels(this.config);
+            if (processedBody.model && !allowedModels.includes(processedBody.model)) {
+                logger.warn(`[QwenApiService] Model '${processedBody.model}' not found in supported list. Using default: '${allowedModels[0]}'`);
+                processedBody.model = allowedModels[0];
             }
 
             // Qwen3 兼容性补丁：针对 Qwen3 "Poisoning" 问题优化工具注入

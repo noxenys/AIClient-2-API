@@ -1,7 +1,7 @@
 import logger from '../utils/logger.js';
 import * as http from 'http';
 import { initializeConfig, CONFIG } from '../core/config-manager.js';
-import { initApiService, autoLinkProviderConfigs } from './service-manager.js';
+import { initApiService, autoLinkProviderConfigs, getProviderCatalogManager } from './service-manager.js';
 import { initializeUIManagement } from './ui-manager.js';
 import { initializeAPIManagement } from './api-manager.js';
 import { createRequestHandler } from '../handlers/request-handler.js';
@@ -193,6 +193,10 @@ async function gracefulShutdown() {
     // 停止 TLS sidecar
     try {
         await getTLSSidecar().stop();
+    } catch { /* ignore */ }
+
+    try {
+        getProviderCatalogManager()?.stop();
     } catch { /* ignore */ }
 
     if (serverInstance) {

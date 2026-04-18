@@ -4,14 +4,14 @@ import {
     getConfiguredSupportedModels,
     getCustomModelActualProvider,
     getCustomModelListProvider,
-    normalizeModelIds,
-    usesManagedModelList
+    normalizeModelIds
 } from './provider-models.js';
 
 const SOURCE_PRIORITY = {
     builtin: 1,
-    managed: 2,
-    custom: 3
+    catalog: 2,
+    managed: 3,
+    custom: 4
 };
 
 const DISPLAY_TOKEN_MAP = {
@@ -172,15 +172,21 @@ function addContribution(registryMap, modelId, {
 
 function getEffectiveProviderModels(providerType, {
     builtinProviderModels = PROVIDER_MODELS,
+    catalogProviderModels = {},
     providerPools = {},
     customModels = []
 } = {}) {
     const builtinModels = resolveBuiltinModels(providerType, builtinProviderModels);
+    const catalogModels = resolveBuiltinModels(providerType, catalogProviderModels);
     const providers = providerPools[providerType] || [];
     const managedModels = normalizeModelIds(
         providers.flatMap(provider => getConfiguredSupportedModels(providerType, provider))
     );
-    const effectiveBaseModels = managedModels.length > 0 ? managedModels : builtinModels;
+    const effectiveBaseModels = managedModels.length > 0
+        ? managedModels
+        : catalogModels.length > 0
+            ? catalogModels
+            : builtinModels;
     const customModelIds = normalizeModelIds(
         customModels
             .filter(model => customModelMatchesProvider(model, providerType))
@@ -189,6 +195,7 @@ function getEffectiveProviderModels(providerType, {
 
     return {
         builtinModels,
+        catalogModels,
         managedModels,
         effectiveModels: normalizeModelIds([...effectiveBaseModels, ...customModelIds])
     };
@@ -197,6 +204,7 @@ function getEffectiveProviderModels(providerType, {
 export function buildModelRegistry({
     providerTypes = [],
     builtinProviderModels = PROVIDER_MODELS,
+    catalogProviderModels = {},
     providerPools = {},
     customModels = []
 } = {}) {
@@ -209,24 +217,47 @@ export function buildModelRegistry({
     normalizedProviderTypes.forEach(providerType => {
         const {
             builtinModels,
+            catalogModels,
             managedModels,
             effectiveModels
         } = getEffectiveProviderModels(providerType, {
             builtinProviderModels,
+            catalogProviderModels,
             providerPools,
             customModels
         });
 
-        const hiddenBuiltinModels = usesManagedModelList(providerType) && managedModels.length > 0
+        const hiddenBuiltinModels = managedModels.length > 0
             ? builtinModels.filter(modelId => !managedModels.includes(modelId))
+            : catalogModels.length > 0
+                ? builtinModels.filter(modelId => !catalogModels.includes(modelId))
+                : [];
+        const hiddenCatalogModels = managedModels.length > 0
+            ? catalogModels.filter(modelId => !managedModels.includes(modelId))
             : [];
-        const managedOnlyModels = managedModels.filter(modelId => !builtinModels.includes(modelId));
+        const catalogOnlyModels = catalogModels.filter(modelId =>
+            !builtinModels.includes(modelId) && !managedModels.includes(modelId)
+        );
+        const managedOnlyModels = managedModels.filter(modelId => !builtinModels.includes(modelId) && !catalogModels.includes(modelId));
 
         builtinModels.forEach(modelId => {
+            const source = managedModels.length > 0 && managedModels.includes(modelId)
+                ? 'managed'
+                : catalogModels.length > 0 && catalogModels.includes(modelId)
+                    ? 'catalog'
+                    : 'builtin';
             addContribution(registryMap, modelId, {
-                source: managedModels.length > 0 && managedModels.includes(modelId) ? 'managed' : 'builtin',
+                source,
                 providerType,
                 listProviderType: effectiveModels.includes(modelId) ? providerType : null
+            });
+        });
+
+        catalogOnlyModels.forEach(modelId => {
+            addContribution(registryMap, modelId, {
+                source: 'catalog',
+                providerType,
+                listProviderType: managedModels.length === 0 ? providerType : null
             });
         });
 
@@ -241,6 +272,13 @@ export function buildModelRegistry({
         hiddenBuiltinModels.forEach(modelId => {
             addContribution(registryMap, modelId, {
                 source: 'builtin',
+                providerType
+            });
+        });
+
+        hiddenCatalogModels.forEach(modelId => {
+            addContribution(registryMap, modelId, {
+                source: 'catalog',
                 providerType
             });
         });

@@ -271,26 +271,33 @@ export class ClaudeApiService {
 
     /**
      * Lists available models.
-     * The Claude API does not have a direct '/models' endpoint; typically, supported models need to be hardcoded.
      * @returns {Promise<object>} List of models.
      */
     async listModels() {
         logger.info('[ClaudeApiService] Listing available models.');
-        // Claude API 没有直接的 /models 端点来列出所有模型。
-        // 通常，你需要根据 Anthropic 的文档硬编码你希望支持的模型。
-        // 这里我们返回一些常见的 Claude 模型作为示例。
-        const models = [
-            { id: "claude-4-sonnet", name: "claude-4-sonnet" },
-            { id: "claude-sonnet-4-20250514", name: "claude-sonnet-4-20250514" },
-            { id: "claude-opus-4-20250514", name: "claude-opus-4-20250514" },
-            { id: "claude-3-7-sonnet-20250219", name: "claude-3-7-sonnet-20250219" },
-            { id: "claude-3-5-sonnet-20241022", name: "claude-3-5-sonnet-20241022" },
-            { id: "claude-3-5-haiku-20241022", name: "claude-3-5-haiku-20241022" },
-            { id: "claude-3-opus-20240229", name: "claude-3-opus-20240229" },
-            { id: "claude-3-haiku-20240307", name: "claude-3-haiku-20240307" },
-        ];
+        try {
+            const axiosConfig = {
+                method: 'get',
+                url: '/models'
+            };
+            this._applySidecar(axiosConfig);
+            const response = await this.client.request(axiosConfig);
+            return response.data;
+        } catch (error) {
+            logger.warn(`[ClaudeApiService] Failed to fetch live model list, falling back to builtin models: ${error.response?.status || error.message}`);
+            const models = [
+                { id: "claude-4-sonnet", name: "claude-4-sonnet" },
+                { id: "claude-sonnet-4-20250514", name: "claude-sonnet-4-20250514" },
+                { id: "claude-opus-4-20250514", name: "claude-opus-4-20250514" },
+                { id: "claude-3-7-sonnet-20250219", name: "claude-3-7-sonnet-20250219" },
+                { id: "claude-3-5-sonnet-20241022", name: "claude-3-5-sonnet-20241022" },
+                { id: "claude-3-5-haiku-20241022", name: "claude-3-5-haiku-20241022" },
+                { id: "claude-3-opus-20240229", name: "claude-3-opus-20240229" },
+                { id: "claude-3-haiku-20240307", name: "claude-3-haiku-20240307" },
+            ];
 
-        return { models: models.map(m => ({ name: m.name })) };
+            return { models: models.map(m => ({ name: m.name })) };
+        }
     }
 }
 

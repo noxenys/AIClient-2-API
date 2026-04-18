@@ -1269,10 +1269,70 @@ export class GrokApiService {
         } catch (error) { return null; }
     }
 
-    async * generateContentStream(model, requestBody, retryCount = 0) {
+    _createStreamResumeState(existingState = null) {
+        return existingState || {
+            primaryResponseId: null,
+            emittedText: '',
+            replayActive: false,
+            replayText: '',
+            replayOffset: 0
+        };
+    }
+
+    _prepareStreamReplay(state) {
+        if (!state?.emittedText) {
+            return false;
+        }
+
+        state.replayActive = true;
+        state.replayText = state.emittedText;
+        state.replayOffset = 0;
+        return true;
+    }
+
+    _applyStreamReplayFilter(resp, state) {
+        if (!state?.replayActive || typeof resp?.token !== 'string' || resp.token.length === 0) {
+            return;
+        }
+
+        let cursor = 0;
+        while (cursor < resp.token.length && state.replayOffset < state.replayText.length) {
+            const expectedChar = state.replayText[state.replayOffset];
+            const actualChar = resp.token[cursor];
+            if (expectedChar !== actualChar) {
+                const expectedPreview = state.replayText.slice(state.replayOffset, state.replayOffset + 40);
+                const actualPreview = resp.token.slice(cursor, cursor + 40);
+                const error = new Error(`Grok stream resume diverged while replaying emitted prefix. expected='${expectedPreview}' actual='${actualPreview}'`);
+                error.code = 'GROK_STREAM_RESUME_MISMATCH';
+                error.status = 502;
+                throw error;
+            }
+            cursor++;
+            state.replayOffset++;
+        }
+
+        if (state.replayOffset >= state.replayText.length) {
+            state.replayActive = false;
+            state.replayText = '';
+            state.replayOffset = 0;
+        }
+
+        resp.token = cursor >= resp.token.length ? '' : resp.token.slice(cursor);
+    }
+
+    _createIncompleteStreamError(message, extra = {}) {
+        const error = new Error(message);
+        error.code = 'GROK_STREAM_INCOMPLETE';
+        error.status = 502;
+        Object.assign(error, extra);
+        return error;
+    }
+
+    async * generateContentStream(model, requestBody, retryCount = 0, streamResumeState = null) {
         const maxRetries = this.getMaxRequestRetries();
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;
         let hasYieldedData = false;
+        const resumeState = this._createStreamResumeState(streamResumeState);
 
         if (this.converter) {
             if (this.uuid) this.converter.setUuid(this.uuid);
@@ -1311,13 +1371,16 @@ export class GrokApiService {
         } */
 
         let fileAttachments = requestBody.fileAttachments || [];
-        const toUpload = [...(requestBody._extractedImages || []), ...(requestBody._extractedFiles || [])];
+        const toUpload = requestBody._uploadedFileAttachmentsPrepared
+            ? []
+            : [...(requestBody._extractedImages || []), ...(requestBody._extractedFiles || [])];
         if (toUpload.length > 0) {
             for (const data of toUpload) {
                 const res = await this.uploadFile(data);
                 if (res?.fileMetadataId) fileAttachments.push(res.fileMetadataId);
             }
             requestBody.fileAttachments = fileAttachments;
+            requestBody._uploadedFileAttachmentsPrepared = true;
         }
 
         const payload = await this.buildPayload(model, requestBody);
@@ -1344,12 +1407,16 @@ export class GrokApiService {
             const fallbackResponseId = uuidv4();
             let lastResponseId = fallbackResponseId;
             let grokStreamUsagePayloadAttached = false;
+            let sawUpstreamDone = false;
 
             for await (const line of rl) {
                 const trimmed = line.trim();
                 if (!trimmed) continue;
                 let dataStr = trimmed.startsWith('data: ') ? trimmed.slice(6).trim() : trimmed;
-                if (dataStr === '[DONE]') break;
+                if (dataStr === '[DONE]') {
+                    sawUpstreamDone = true;
+                    break;
+                }
                 try {
                     const json = JSON.parse(dataStr);
                     if (json.result?.response) {
@@ -1358,11 +1425,20 @@ export class GrokApiService {
                             grokStreamUsagePayloadAttached = true;
                         }
                         const resp = json.result.response;
-                        if (!resp.responseId) {
+                        const upstreamResponseId = resp.responseId;
+                        if (!resumeState.primaryResponseId && upstreamResponseId) {
+                            resumeState.primaryResponseId = upstreamResponseId;
+                        }
+                        if (resumeState.primaryResponseId) {
+                            resp.responseId = resumeState.primaryResponseId;
+                        } else if (!resp.responseId) {
                             resp.responseId = lastResponseId;
                         }
                         resp._requestBaseUrl = reqBaseUrl;
                         resp._uuid = this.uuid;
+                        if (resp.isDone) {
+                            sawUpstreamDone = true;
+                        }
 
                         // --- 预处理与中心化过滤 ---
                         
@@ -1374,6 +1450,8 @@ export class GrokApiService {
                             resp.isThinking = false;
                             delete resp.messageStepId;
                         }
+
+                        this._applyStreamReplayFilter(resp, resumeState);
 
                         // 1. 处理 cardAttachment (根据最新指令，若是图片则不处理)
                         if (resp.cardAttachment) {
@@ -1433,13 +1511,27 @@ export class GrokApiService {
                                 if (hdUrl) vid.videoUrl = hdUrl;
                             }
                         }
+                        if (resp.token) {
+                            resumeState.emittedText += resp.token;
+                        }
+                        lastResponseId = resp.responseId || lastResponseId;
                     }
                     hasYieldedData = true;
                     if (process.env.GROK_LOG_LAST_CHUNK === '1' || /^true$/i.test(process.env.GROK_LOG_LAST_CHUNK || '')) {
                         this._grokLastStreamJsonForDebug = json;
                     }
                     yield json;
-                } catch (e) {}
+                } catch (e) {
+                    if (e?.code === 'GROK_STREAM_RESUME_MISMATCH') {
+                        throw e;
+                    }
+                }
+            }
+            if (!sawUpstreamDone) {
+                throw this._createIncompleteStreamError('Grok stream ended before completion marker was received', {
+                    hasYieldedData,
+                    lastResponseId
+                });
             }
             if ((process.env.GROK_LOG_LAST_CHUNK === '1' || /^true$/i.test(process.env.GROK_LOG_LAST_CHUNK || '')) && this._grokLastStreamJsonForDebug) {
                 try {
@@ -1456,6 +1548,27 @@ export class GrokApiService {
         } catch (error) {
             const { status, errorCode, errorMessage, isNetworkError } = this.classifyApiError(error);
             const canRetryInRequest = !hasYieldedData && retryCount < maxRetries;
+            const canResumeInterruptedStream =
+                hasYieldedData &&
+                retryCount < maxRetries &&
+                !isImagine &&
+                !isVideo &&
+                !resumeState.replayActive &&
+                !!resumeState.emittedText &&
+                (
+                    error.code === 'GROK_STREAM_INCOMPLETE' ||
+                    isNetworkError ||
+                    status === 429 ||
+                    (status >= 500 && status < 600)
+                );
+
+            if (canResumeInterruptedStream && this._prepareStreamReplay(resumeState)) {
+                const delay = baseDelay * Math.pow(2, retryCount);
+                logger.warn(`[Grok API] Stream interrupted after partial output. Retrying transparently in ${delay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                yield* this.generateContentStream(model, requestBody, retryCount + 1, resumeState);
+                return;
+            }
 
             // 只有图片生成且未发送过数据时才尝试 WebSocket Fallback (明确排除视频)
             const isImagineImage = (modelLower.includes('imagine') || modelLower.includes('edit')) && !modelLower.includes('video');
@@ -1473,7 +1586,7 @@ export class GrokApiService {
                 const delay = baseDelay * Math.pow(2, retryCount);
                 logger.info(`[Grok API] Received 429 during stream. Retrying in ${delay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, delay));
-                yield* this.generateContentStream(model, requestBody, retryCount + 1);
+                yield* this.generateContentStream(model, requestBody, retryCount + 1, resumeState);
                 return;
             }
 
@@ -1481,7 +1594,7 @@ export class GrokApiService {
                 const delay = baseDelay * Math.pow(2, retryCount);
                 logger.info(`[Grok API] Received ${status} server error during stream. Retrying in ${delay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, delay));
-                yield* this.generateContentStream(model, requestBody, retryCount + 1);
+                yield* this.generateContentStream(model, requestBody, retryCount + 1, resumeState);
                 return;
             }
 
@@ -1490,7 +1603,7 @@ export class GrokApiService {
                 const errorIdentifier = errorCode || errorMessage.substring(0, 50);
                 logger.info(`[Grok API] Network error (${errorIdentifier}) during stream. Retrying in ${delay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
                 await new Promise(resolve => setTimeout(resolve, delay));
-                yield* this.generateContentStream(model, requestBody, retryCount + 1);
+                yield* this.generateContentStream(model, requestBody, retryCount + 1, resumeState);
                 return;
             }
 

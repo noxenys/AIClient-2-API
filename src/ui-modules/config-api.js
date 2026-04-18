@@ -5,7 +5,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { CONFIG } from '../core/config-manager.js';
 import { serviceInstances } from '../providers/adapter.js';
-import { initApiService } from '../services/service-manager.js';
+import { getProviderCatalogManager, initApiService } from '../services/service-manager.js';
 import { getRequestBody } from '../utils/common.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
 import { HEALTH_CHECK, PASSWORD, NETWORK, RETRY } from '../utils/constants.js';
@@ -77,6 +77,11 @@ export async function handleGetConfig(req, res, currentConfig) {
         LOGIN_EXPIRY: currentConfig.LOGIN_EXPIRY,
         PROVIDER_POOLS_FILE_PATH: currentConfig.PROVIDER_POOLS_FILE_PATH,
         MAX_ERROR_COUNT: currentConfig.MAX_ERROR_COUNT,
+        PROVIDER_CATALOG_CACHE_FILE_PATH: currentConfig.PROVIDER_CATALOG_CACHE_FILE_PATH,
+        PROVIDER_CATALOG_REFRESH_INTERVAL_MS: currentConfig.PROVIDER_CATALOG_REFRESH_INTERVAL_MS,
+        PROVIDER_CATALOG_STARTUP_REFRESH: currentConfig.PROVIDER_CATALOG_STARTUP_REFRESH,
+        PROVIDER_CATALOG_SAMPLE_LIMIT: currentConfig.PROVIDER_CATALOG_SAMPLE_LIMIT,
+        PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS: currentConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS,
         SYSTEM_PROMPT_REPLACEMENTS: currentConfig.SYSTEM_PROMPT_REPLACEMENTS,
         WARMUP_TARGET: currentConfig.WARMUP_TARGET,
         REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,
@@ -172,6 +177,11 @@ export async function handleUpdateConfig(req, res, currentConfig) {
         if (newConfig.LOGIN_EXPIRY !== undefined) currentConfig.LOGIN_EXPIRY = newConfig.LOGIN_EXPIRY;
         if (newConfig.PROVIDER_POOLS_FILE_PATH !== undefined) currentConfig.PROVIDER_POOLS_FILE_PATH = newConfig.PROVIDER_POOLS_FILE_PATH;
         if (newConfig.MAX_ERROR_COUNT !== undefined) currentConfig.MAX_ERROR_COUNT = newConfig.MAX_ERROR_COUNT;
+        if (newConfig.PROVIDER_CATALOG_CACHE_FILE_PATH !== undefined) currentConfig.PROVIDER_CATALOG_CACHE_FILE_PATH = newConfig.PROVIDER_CATALOG_CACHE_FILE_PATH;
+        if (newConfig.PROVIDER_CATALOG_REFRESH_INTERVAL_MS !== undefined) currentConfig.PROVIDER_CATALOG_REFRESH_INTERVAL_MS = newConfig.PROVIDER_CATALOG_REFRESH_INTERVAL_MS;
+        if (newConfig.PROVIDER_CATALOG_STARTUP_REFRESH !== undefined) currentConfig.PROVIDER_CATALOG_STARTUP_REFRESH = newConfig.PROVIDER_CATALOG_STARTUP_REFRESH;
+        if (newConfig.PROVIDER_CATALOG_SAMPLE_LIMIT !== undefined) currentConfig.PROVIDER_CATALOG_SAMPLE_LIMIT = newConfig.PROVIDER_CATALOG_SAMPLE_LIMIT;
+        if (newConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS !== undefined) currentConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS = newConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS;
         if (newConfig.WARMUP_TARGET !== undefined) currentConfig.WARMUP_TARGET = newConfig.WARMUP_TARGET;
         if (newConfig.REFRESH_CONCURRENCY_PER_PROVIDER !== undefined) currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER = newConfig.REFRESH_CONCURRENCY_PER_PROVIDER;
         if (newConfig.providerFallbackChain !== undefined) currentConfig.providerFallbackChain = newConfig.providerFallbackChain;
@@ -305,6 +315,11 @@ export async function handleUpdateConfig(req, res, currentConfig) {
                 LOGIN_EXPIRY: currentConfig.LOGIN_EXPIRY,
                 PROVIDER_POOLS_FILE_PATH: currentConfig.PROVIDER_POOLS_FILE_PATH,
                 MAX_ERROR_COUNT: currentConfig.MAX_ERROR_COUNT,
+                PROVIDER_CATALOG_CACHE_FILE_PATH: currentConfig.PROVIDER_CATALOG_CACHE_FILE_PATH,
+                PROVIDER_CATALOG_REFRESH_INTERVAL_MS: currentConfig.PROVIDER_CATALOG_REFRESH_INTERVAL_MS,
+                PROVIDER_CATALOG_STARTUP_REFRESH: currentConfig.PROVIDER_CATALOG_STARTUP_REFRESH,
+                PROVIDER_CATALOG_SAMPLE_LIMIT: currentConfig.PROVIDER_CATALOG_SAMPLE_LIMIT,
+                PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS: currentConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS,
                 WARMUP_TARGET: currentConfig.WARMUP_TARGET,
                 REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,
                 providerFallbackChain: currentConfig.providerFallbackChain,
@@ -350,6 +365,12 @@ export async function handleUpdateConfig(req, res, currentConfig) {
 
         // Update the global CONFIG object to reflect changes immediately
         Object.assign(CONFIG, currentConfig);
+
+        const providerCatalogManager = getProviderCatalogManager();
+        if (providerCatalogManager) {
+            providerCatalogManager.updateContext({ globalConfig: currentConfig });
+            await providerCatalogManager.start({ startupRun: false });
+        }
 
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
