@@ -1,12 +1,4 @@
 node_modules
-tests/
-coverage/
-logs/
-.env
-.env.local
-.env.*.local
-credentials.json
-npm-debug.log
 .serena/
 .claude/
 CLAUDE.md
@@ -23,6 +15,4 @@ usage-cache.json
 api-potluck-keys.json
 api-potluck-data.json
 model-usage-stats.json
-configs/pwd
-src/example/
 AGENTS.md
