@@ -94,6 +94,7 @@
 > <details>
 > <summary>Click to expand detailed version history</summary>
 > 
+> - **2026.04.19** - Added model status monitoring: provider modal and dashboard model list now directly show model health, success rate, recent 401/403/429, stream interruptions, latency, and runtime selectable node counts
 > - **2026.04.19** - Fixed deployment port compatibility: the server and healthcheck now automatically honor `PORT`/`SERVER_PORT`, reducing transient 502s during Zeabur and other PaaS restarts
 > - **2026.04.18** - Added Grok custom model alias mapping examples, allowing clients to expose Grok as `gpt-5.4` or `claude-opus-4.7` through `custom_models.json`
 > - **2026.03.02** - Added Grok protocol support, supporting access to xAI Grok series models (Grok 3/4) via Cookie/SSO, supporting multimodal input, image/video generation, automatic token refresh and streaming output

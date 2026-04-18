@@ -411,6 +411,32 @@ function getPluginHookRequestId(config) {
     return config?._monitorRequestId || config?._pluginRequestId || null;
 }
 
+function ensureMonitoringRequestId(config) {
+    if (!config || typeof config !== 'object') {
+        return null;
+    }
+
+    const existingRequestId = getPluginHookRequestId(config);
+    if (existingRequestId) {
+        config._monitorRequestId = existingRequestId;
+        return existingRequestId;
+    }
+
+    const generatedRequestId = `req_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+    config._monitorRequestId = generatedRequestId;
+    return generatedRequestId;
+}
+
+async function getModelStatusManagerInstance() {
+    try {
+        const { getModelStatusManager } = await import('../services/service-manager.js');
+        return getModelStatusManager?.() || null;
+    } catch (error) {
+        logger.warn(`[ModelStatus] Failed to resolve manager: ${error.message}`);
+        return null;
+    }
+}
+
 export async function handleStreamRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null) {
     let fullResponseText = '';
     let fullResponseJson = '';
@@ -424,6 +450,60 @@ export async function handleStreamRequest(res, service, model, requestBody, from
     const currentRetry = retryContext?.currentRetry ?? 0;
     const CONFIG = retryContext?.CONFIG;
     const isRetry = currentRetry > 0;
+    const monitoringRequestId = ensureMonitoringRequestId(CONFIG);
+    const modelStatusManager = await getModelStatusManagerInstance();
+    const attemptStartedAt = Date.now();
+    let attemptRecorded = false;
+
+    const recordAttemptSuccess = () => {
+        if (attemptRecorded || !modelStatusManager) {
+            return;
+        }
+
+        modelStatusManager.recordSuccess({
+            providerType: toProvider,
+            modelId: model,
+            isStream: true,
+            durationMs: Date.now() - attemptStartedAt,
+            pooluuid,
+            customName
+        });
+        attemptRecorded = true;
+    };
+
+    const recordAttemptFailure = (error) => {
+        if (attemptRecorded || !modelStatusManager) {
+            return;
+        }
+
+        modelStatusManager.recordFailure({
+            providerType: toProvider,
+            modelId: model,
+            isStream: true,
+            durationMs: Date.now() - attemptStartedAt,
+            errorMessage: error?.message || String(error || ''),
+            httpStatus: error?.response?.status || error?.status || null,
+            pooluuid,
+            customName
+        });
+        attemptRecorded = true;
+    };
+
+    const recordAttemptAbort = () => {
+        if (attemptRecorded || !modelStatusManager) {
+            return;
+        }
+
+        modelStatusManager.recordAbort({
+            providerType: toProvider,
+            modelId: model,
+            isStream: true,
+            durationMs: Date.now() - attemptStartedAt,
+            pooluuid,
+            customName
+        });
+        attemptRecorded = true;
+    };
     
     // 使用共享的 clientDisconnected 状态（如果是重试，继承上层的状态）
     let clientDisconnected = retryContext?.clientDisconnected || { value: false };
@@ -464,7 +544,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         const nativeStream = await service.generateContentStream(model, requestBody);
         const addEvent = getProtocolPrefix(fromProvider) === MODEL_PROTOCOL_PREFIX.CLAUDE || getProtocolPrefix(fromProvider) === MODEL_PROTOCOL_PREFIX.OPENAI_RESPONSES;
         // 为每个请求生成唯一 ID，用于在单例 converter 中隔离并发流状态
-        const streamRequestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+        const streamRequestId = monitoringRequestId || `req_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
         for await (const nativeChunk of nativeStream) {
             // 检查客户端是否已断开连接
@@ -588,8 +668,14 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             }
         }
 
+        if (clientDisconnected.value) {
+            recordAttemptAbort();
+        } else {
+            recordAttemptSuccess();
+        }
+
         // 流式请求成功完成，统计使用次数，错误次数重置为0
-        if (providerPoolManager && pooluuid) {
+        if (!clientDisconnected.value && providerPoolManager && pooluuid) {
             const customNameDisplay = customName ? `, ${customName}` : '';
             logger.info(`[Provider Pool] Increasing usage count for ${toProvider} (${pooluuid}${customNameDisplay}) after successful stream request`);
             providerPoolManager.markProviderHealthy(toProvider, {
@@ -602,10 +688,13 @@ export async function handleStreamRequest(res, service, model, requestBody, from
         
         // 如果客户端已断开，不需要发送错误响应
         if (clientDisconnected.value) {
+            recordAttemptAbort();
             logger.info('[Stream] Skipping error response due to client disconnect');
             responseClosed = true;
             return;
         }
+
+        recordAttemptFailure(error);
         
         // 如果已经发送了数据（包括 metadata），不进行重试（避免响应数据损坏或顺序错误）
         if (anyDataSent) {
@@ -778,6 +867,72 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
     const maxRetries = retryContext?.maxRetries ?? 5;
     const currentRetry = retryContext?.currentRetry ?? 0;
     const CONFIG = retryContext?.CONFIG;
+    ensureMonitoringRequestId(CONFIG);
+    const modelStatusManager = await getModelStatusManagerInstance();
+    const attemptStartedAt = Date.now();
+    let attemptRecorded = false;
+    let clientDisconnected = false;
+
+    const recordAttemptSuccess = () => {
+        if (attemptRecorded || !modelStatusManager) {
+            return;
+        }
+
+        modelStatusManager.recordSuccess({
+            providerType: toProvider,
+            modelId: model,
+            isStream: false,
+            durationMs: Date.now() - attemptStartedAt,
+            pooluuid,
+            customName
+        });
+        attemptRecorded = true;
+    };
+
+    const recordAttemptFailure = (error) => {
+        if (attemptRecorded || !modelStatusManager) {
+            return;
+        }
+
+        modelStatusManager.recordFailure({
+            providerType: toProvider,
+            modelId: model,
+            isStream: false,
+            durationMs: Date.now() - attemptStartedAt,
+            errorMessage: error?.message || String(error || ''),
+            httpStatus: error?.response?.status || error?.status || null,
+            pooluuid,
+            customName
+        });
+        attemptRecorded = true;
+    };
+
+    const recordAttemptAbort = () => {
+        if (attemptRecorded || !modelStatusManager) {
+            return;
+        }
+
+        modelStatusManager.recordAbort({
+            providerType: toProvider,
+            modelId: model,
+            isStream: false,
+            durationMs: Date.now() - attemptStartedAt,
+            pooluuid,
+            customName
+        });
+        attemptRecorded = true;
+    };
+
+    const onClientClose = () => {
+        clientDisconnected = true;
+    };
+
+    const onClientError = () => {
+        clientDisconnected = true;
+    };
+
+    res.on('close', onClientClose);
+    res.on('error', onClientError);
     
     try{
         // The service returns the response in its native format (toProvider).
@@ -812,6 +967,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
 
         //logger.info(`[Response] Sending response to client: ${JSON.stringify(clientResponse)}`);
         await handleUnifiedResponse(res, JSON.stringify(clientResponse), false);
+        recordAttemptSuccess();
         await logConversation('output', responseText, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME);
         // fs.writeFile('oldResponse'+Date.now()+'.json', JSON.stringify(clientResponse));
         
@@ -825,6 +981,13 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         }
     } catch (error) {
         logger.error('\n[Server] Error during unary processing:', error.stack);
+
+        if (clientDisconnected) {
+            recordAttemptAbort();
+            return;
+        }
+
+        recordAttemptFailure(error);
         
         // 获取状态码（用于日志记录，不再用于判断是否重试）
         const status = error.response?.status;
@@ -910,6 +1073,9 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
         const statusCode = error.status || error.code || (error.response && error.response.status) || 500;
         await handleUnifiedResponse(res, JSON.stringify(errorResponse), false, statusCode);
     } finally {
+        res.off('close', onClientClose);
+        res.off('error', onClientError);
+
         // 确保在请求结束或出错时释放插槽
         if (providerPoolManager && pooluuid) {
             providerPoolManager.releaseSlot(toProvider, pooluuid);
@@ -1154,9 +1320,10 @@ export async function handleContentGenerationRequest(req, res, service, endpoint
 
     // 1. Convert request body from client format to backend format, if necessary.
     let processedRequestBody = originalRequestBody;
+    const hookRequestId = ensureMonitoringRequestId(CONFIG);
     // 将 _monitorRequestId 注入到 requestBody 中，以便在 service 内部访问
-    if (CONFIG._monitorRequestId) {
-        processedRequestBody._monitorRequestId = CONFIG._monitorRequestId;
+    if (hookRequestId) {
+        processedRequestBody._monitorRequestId = hookRequestId;
     }
     
     // 将 requestBaseUrl 注入到 requestBody 中，以便在转换器中使用

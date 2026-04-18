@@ -22,6 +22,12 @@ const debouncedModelRegistryRefresh = createDebouncedTask(() => {
     }
 }, 400);
 
+const debouncedActiveProviderModalRefresh = createDebouncedTask((providerType) => {
+    if (typeof refreshProviderConfig === 'function' && providerType) {
+        refreshProviderConfig(providerType);
+    }
+}, 400);
+
 /**
  * Server-Sent Events初始化
  */
@@ -73,6 +79,11 @@ function initEventStream() {
     newEventSource.addEventListener('model_catalog_update', (event) => {
         const data = JSON.parse(event.data);
         handleModelCatalogUpdate(data);
+    });
+
+    newEventSource.addEventListener('model_status_update', (event) => {
+        const data = JSON.parse(event.data);
+        handleModelStatusUpdate(data);
     });
 }
 
@@ -152,6 +163,20 @@ function handleProviderUpdate(data) {
 
 function handleModelCatalogUpdate(data) {
     if (!data?.providerType) {
+        return;
+    }
+
+    const modal = document.querySelector('.provider-modal');
+    if (modal && modal.getAttribute('data-provider-type') === data.providerType) {
+        debouncedActiveProviderModalRefresh(data.providerType);
+    }
+
+    debouncedModelRegistryRefresh(data);
+}
+
+function handleModelStatusUpdate(data) {
+    if (!data?.providerType) {
+        debouncedModelRegistryRefresh(data);
         return;
     }
 

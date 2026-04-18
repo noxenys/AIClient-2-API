@@ -29,11 +29,14 @@ let currentFilteredCount = 0;
 let currentTotalPages = 1;
 let currentProviderSummary = {};
 let currentProviderCatalog = null;
+let currentProviderModelStatus = null;
 let currentProviderFilters = getDefaultProviderFilters();
 let providerFetchSequence = 0;
 let providerCatalogFetchSequence = 0;
 let providerCatalogLoading = false;
 let providerCatalogRefreshing = false;
+let providerModelStatusFetchSequence = 0;
+let providerModelStatusLoading = false;
 let nodeSearchDebounceTimer = null;
 let currentViewMode = localStorage.getItem('providerViewMode') || 'list';
 
@@ -143,6 +146,22 @@ function normalizeProviderCatalogPayload(payload = {}, providerType = '') {
         refreshIntervalMs: payload?.refreshIntervalMs ?? null,
         filePath: payload?.filePath || '',
         entry: payload?.providers?.[providerType] || null,
+        fetchError: null
+    };
+}
+
+function normalizeProviderModelStatusPayload(payload = {}, providerType = '') {
+    return {
+        providerType,
+        updatedAt: payload?.updatedAt || null,
+        recentWindowSize: payload?.recentWindowSize ?? null,
+        filePath: payload?.filePath || '',
+        entry: payload?.providers?.[providerType] || {
+            providerType,
+            summary: {},
+            items: [],
+            byModel: {}
+        },
         fetchError: null
     };
 }
@@ -636,6 +655,149 @@ function formatProviderDateTime(value) {
     return Number.isFinite(date.getTime()) ? date.toLocaleString(getCurrentLanguage()) : String(value);
 }
 
+function formatModelStatusLabel(status = 'unknown') {
+    const normalizedStatus = String(status || 'unknown').trim().toLowerCase() || 'unknown';
+    return translateOrFallback(`modal.provider.modelStatus.status.${normalizedStatus}`, normalizedStatus);
+}
+
+function formatModelStatusRate(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return '-';
+    }
+
+    return `${Math.round(numeric * 100)}%`;
+}
+
+function formatModelStatusLatency(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+        return '-';
+    }
+
+    if (numeric < 1000) {
+        return `${Math.round(numeric)} ms`;
+    }
+
+    return `${(numeric / 1000).toFixed(1)} s`;
+}
+
+function renderProviderModelStatusItem(item = {}) {
+    const runtime = item.runtime || {};
+    const recentSummary = item.recentSummary || {};
+    const status = String(item.status || 'unknown').trim().toLowerCase() || 'unknown';
+    const metricItems = [
+        `${translateOrFallback('modal.provider.modelStatus.metric.successRate', '成功率')}: ${formatModelStatusRate(recentSummary.successRate ?? item.successRate)}`,
+        `${translateOrFallback('modal.provider.modelStatus.metric.nodes', '节点')}: ${runtime.selectableNodeCount ?? 0}/${runtime.supportingNodeCount ?? 0}`,
+        `429: ${recentSummary.httpStatusCounts?.['429'] ?? 0}`,
+        `401/403: ${(recentSummary.httpStatusCounts?.['401'] ?? 0) + (recentSummary.httpStatusCounts?.['403'] ?? 0)}`,
+        `${translateOrFallback('modal.provider.modelStatus.metric.streamInterrupted', '流中断')}: ${recentSummary.streamInterruptedCount ?? 0}`,
+        `${translateOrFallback('modal.provider.modelStatus.metric.latency', '延迟')}: ${formatModelStatusLatency(recentSummary.avgLatencyMs ?? item.avgLatencyMs)}`
+    ];
+
+    if (item.lastFailureType) {
+        metricItems.push(`${translateOrFallback('modal.provider.modelStatus.metric.lastFailure', '最近故障')}: ${item.lastFailureType}`);
+    }
+
+    if (item.lastFailureAt) {
+        metricItems.push(`${translateOrFallback('modal.provider.modelStatus.metric.lastFailureAt', '故障时间')}: ${formatProviderDateTime(item.lastFailureAt)}`);
+    }
+
+    return `
+        <div class="provider-model-status-item">
+            <div class="provider-model-status-item-header">
+                <code class="provider-model-status-name">${escapeHtml(item.modelId || '-')}</code>
+                <span class="provider-model-status-badge status-${escapeHtml(status)}">${escapeHtml(formatModelStatusLabel(status))}</span>
+            </div>
+            <div class="provider-model-status-item-meta">
+                ${metricItems.map(metric => `<span class="provider-model-status-chip">${escapeHtml(metric)}</span>`).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderProviderModelStatusPanel(providerType = currentProviderType) {
+    const statusState = currentProviderModelStatus && currentProviderModelStatus.providerType === providerType
+        ? currentProviderModelStatus
+        : null;
+    const entry = statusState?.entry || null;
+    const summary = entry?.summary || {};
+    const items = Array.isArray(entry?.items) ? entry.items.slice(0, 12) : [];
+    const updatedAt = statusState?.updatedAt ? formatProviderDateTime(statusState.updatedAt) : '-';
+    const totalModels = summary.totalModels ?? items.length;
+
+    return `
+        <div class="provider-model-status-card ${providerModelStatusLoading ? 'is-loading' : ''}">
+            <div class="provider-model-status-header">
+                <div class="provider-model-status-title">
+                    <i class="fas fa-heart-pulse"></i>
+                    <span>${escapeHtml(t('modal.provider.modelStatus.title'))}</span>
+                </div>
+                <span class="provider-model-status-updated">
+                    ${escapeHtml(t('modal.provider.modelStatus.updatedAt'))}: ${escapeHtml(updatedAt)}
+                </span>
+            </div>
+            <div class="provider-model-status-grid">
+                <div class="provider-model-status-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.totalModels'))}</span>
+                    <span class="value">${totalModels}</span>
+                </div>
+                <div class="provider-model-status-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.healthyCount'))}</span>
+                    <span class="value">${summary.healthyCount ?? 0}</span>
+                </div>
+                <div class="provider-model-status-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.degradedCount'))}</span>
+                    <span class="value">${summary.degradedCount ?? 0}</span>
+                </div>
+                <div class="provider-model-status-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.failingCount'))}</span>
+                    <span class="value">${summary.failingCount ?? 0}</span>
+                </div>
+                <div class="provider-model-status-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.unknownCount'))}</span>
+                    <span class="value">${summary.unknownCount ?? 0}</span>
+                </div>
+                <div class="provider-model-status-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.successRate'))}</span>
+                    <span class="value">${escapeHtml(formatModelStatusRate(summary.successRate))}</span>
+                </div>
+                <div class="provider-model-status-metric">
+                    <span class="label">429</span>
+                    <span class="value">${summary.recent429Count ?? 0}</span>
+                </div>
+                <div class="provider-model-status-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.streamInterrupted'))}</span>
+                    <span class="value">${summary.streamInterruptedCount ?? 0}</span>
+                </div>
+            </div>
+            ${statusState?.fetchError ? `
+                <div class="provider-model-status-warning">
+                    <i class="fas fa-triangle-exclamation"></i>
+                    <span>${escapeHtml(t('modal.provider.modelStatus.fetchFailed'))}: ${escapeHtml(statusState.fetchError)}</span>
+                </div>
+            ` : ''}
+            ${providerModelStatusLoading && items.length === 0 ? `
+                <div class="provider-model-status-empty">
+                    <i class="fas fa-spinner fa-spin"></i>
+                    <span>${escapeHtml(t('modal.provider.modelStatus.loading'))}</span>
+                </div>
+            ` : ''}
+            ${!providerModelStatusLoading && items.length === 0 ? `
+                <div class="provider-model-status-empty">
+                    <i class="fas fa-wave-square"></i>
+                    <span>${escapeHtml(t('modal.provider.modelStatus.empty'))}</span>
+                </div>
+            ` : ''}
+            ${items.length > 0 ? `
+                <div class="provider-model-status-list">
+                    ${items.map(renderProviderModelStatusItem).join('')}
+                </div>
+            ` : ''}
+        </div>
+    `;
+}
+
 function renderProviderCatalogPanel(providerType = currentProviderType) {
     const catalogState = currentProviderCatalog && currentProviderCatalog.providerType === providerType
         ? currentProviderCatalog
@@ -906,8 +1068,56 @@ function renderProviderSummaryPanel() {
                 </span>
             </div>
             ${renderProviderCatalogPanel()}
+            ${renderProviderModelStatusPanel()}
         </div>
     `;
+}
+
+async function fetchProviderModelStatusState(providerType, { silent = false } = {}) {
+    const requestSeq = ++providerModelStatusFetchSequence;
+    providerModelStatusLoading = true;
+
+    if (!currentProviderModelStatus || currentProviderModelStatus.providerType !== providerType) {
+        currentProviderModelStatus = normalizeProviderModelStatusPayload({}, providerType);
+    } else {
+        currentProviderModelStatus = {
+            ...currentProviderModelStatus,
+            fetchError: null
+        };
+    }
+
+    renderCurrentProviderPage();
+
+    try {
+        const payload = await window.apiClient.get(`/api/model-status/${encodeURIComponent(providerType)}`);
+        if (requestSeq !== providerModelStatusFetchSequence) {
+            return null;
+        }
+
+        currentProviderModelStatus = normalizeProviderModelStatusPayload(payload, providerType);
+        return currentProviderModelStatus;
+    } catch (error) {
+        if (requestSeq !== providerModelStatusFetchSequence) {
+            return null;
+        }
+
+        currentProviderModelStatus = {
+            ...(currentProviderModelStatus || normalizeProviderModelStatusPayload({}, providerType)),
+            providerType,
+            fetchError: error.message
+        };
+
+        if (!silent) {
+            showToast(t('common.error'), `${t('modal.provider.modelStatus.fetchFailed')}: ${error.message}`, 'error');
+        }
+
+        throw error;
+    } finally {
+        if (requestSeq === providerModelStatusFetchSequence) {
+            providerModelStatusLoading = false;
+            renderCurrentProviderPage();
+        }
+    }
 }
 
 /**
@@ -921,10 +1131,12 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
     currentProviderFilters = getDefaultProviderFilters();
     currentProviderSummary = {};
     currentProviderCatalog = null;
+    currentProviderModelStatus = null;
     currentSelectableCount = 0;
     currentBusyCount = 0;
     providerCatalogLoading = false;
     providerCatalogRefreshing = false;
+    providerModelStatusLoading = false;
 
     // 保存当前数据用于分页
     applyProviderPageData(data, initialSearchTerm);
@@ -1083,6 +1295,7 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
     // 初始渲染
     renderCurrentProviderPage();
     void fetchProviderCatalogState(providerType, { silent: true }).catch(() => {});
+    void fetchProviderModelStatusState(providerType, { silent: true }).catch(() => {});
 }
 
 function renderProviderRuntimeState(provider = {}) {
@@ -2214,6 +2427,7 @@ async function refreshProviderConfig(providerType) {
 
         if (shouldRefreshCatalog) {
             tasks.push(fetchProviderCatalogState(providerType, { silent: true }));
+            tasks.push(fetchProviderModelStatusState(providerType, { silent: true }));
         }
 
         const results = await Promise.allSettled(tasks);

@@ -28,7 +28,7 @@ import { removeProvidersByPredicate, shouldPermanentlyDeleteProvider } from '../
 import { inferProviderStateFromConfig, isProviderStateSelectable } from '../utils/provider-state.js';
 import { broadcastEvent } from './event-broadcast.js';
 import { getRegisteredProviders, invalidateServiceAdapter } from '../providers/adapter.js';
-import { getProviderCatalogManager } from '../services/service-manager.js';
+import { getProviderCatalogManager, getModelStatusManager } from '../services/service-manager.js';
 
 const BLOCKED_SELECTION_SCORE = 1e18;
 const DEFAULT_BATCH_IMPORT_MODE = 'append';
@@ -590,6 +590,7 @@ function loadProviderPools(currentConfig, providerPoolManager) {
 function getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, providerTypes = []) {
     const providerPools = loadProviderPools(currentConfig, providerPoolManager);
     const providerCatalogManager = getProviderCatalogManager();
+    const modelStatusManager = getModelStatusManager();
     const catalogProviderModels = providerCatalogManager?.getProviderModelMap(providerTypes) || {};
 
     return {
@@ -604,6 +605,14 @@ function getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, prov
             updatedAt: null,
             refreshIntervalMs: null,
             filePath: currentConfig?.PROVIDER_CATALOG_CACHE_FILE_PATH || 'configs/provider_catalog_cache.json',
+            providers: {}
+        },
+        modelStatus: modelStatusManager?.getStatusPayload(providerTypes) || {
+            version: 1,
+            updatedAt: null,
+            recentWindowSize: currentConfig?.MODEL_STATUS_RECENT_WINDOW_SIZE || null,
+            persistIntervalMs: currentConfig?.MODEL_STATUS_PERSIST_INTERVAL_MS || null,
+            filePath: currentConfig?.MODEL_STATUS_CACHE_FILE_PATH || 'configs/model_status_cache.json',
             providers: {}
         }
     };
@@ -1594,6 +1603,29 @@ export async function handleRefreshModelCatalog(req, res, currentConfig, provide
         return true;
     } catch (error) {
         logger.error('[UI API] Failed to refresh model catalog:', error.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: error.message } }));
+        return true;
+    }
+}
+
+export async function handleGetModelStatus(req, res, currentConfig, providerPoolManager, providerType = null) {
+    try {
+        const modelStatusManager = getModelStatusManager();
+        const payload = modelStatusManager?.getStatusPayload(providerType ? [providerType] : null) || {
+            version: 1,
+            updatedAt: null,
+            recentWindowSize: currentConfig?.MODEL_STATUS_RECENT_WINDOW_SIZE || null,
+            persistIntervalMs: currentConfig?.MODEL_STATUS_PERSIST_INTERVAL_MS || null,
+            filePath: currentConfig?.MODEL_STATUS_CACHE_FILE_PATH || 'configs/model_status_cache.json',
+            providers: {}
+        };
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(payload));
+        return true;
+    } catch (error) {
+        logger.error('[UI API] Failed to load model status:', error.message);
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: { message: error.message } }));
         return true;

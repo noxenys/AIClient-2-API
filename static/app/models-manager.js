@@ -12,6 +12,90 @@ let modelsCache = null;
 // 提供商配置缓存
 let currentProviderConfigs = null;
 
+function translateOrFallback(key, fallback, params = {}) {
+    const translated = t(key, params);
+    return translated === key ? fallback : translated;
+}
+
+function formatRate(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return '-';
+    }
+
+    return `${Math.round(numeric * 100)}%`;
+}
+
+function formatLatency(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+        return '-';
+    }
+
+    if (numeric < 1000) {
+        return `${Math.round(numeric)} ms`;
+    }
+
+    return `${(numeric / 1000).toFixed(1)} s`;
+}
+
+function formatModelStatusLabel(status = 'unknown') {
+    const normalizedStatus = String(status || 'unknown').trim().toLowerCase() || 'unknown';
+    return translateOrFallback(`models.status.${normalizedStatus}`, normalizedStatus);
+}
+
+function buildModelStatusSummary(modelStatus = null) {
+    if (!modelStatus || typeof modelStatus !== 'object') {
+        return '';
+    }
+
+    const runtime = modelStatus.runtime || {};
+    const recentSummary = modelStatus.recentSummary || {};
+    const metricItems = [
+        {
+            key: 'success',
+            label: translateOrFallback('models.metric.successRate', '成功率'),
+            value: formatRate(recentSummary.successRate ?? modelStatus.successRate)
+        },
+        {
+            key: 'nodes',
+            label: translateOrFallback('models.metric.selectableNodes', '可选节点'),
+            value: `${runtime.selectableNodeCount ?? 0}/${runtime.supportingNodeCount ?? 0}`
+        },
+        {
+            key: 'http429',
+            label: '429',
+            value: String(recentSummary.httpStatusCounts?.['429'] ?? 0)
+        },
+        {
+            key: 'http401403',
+            label: '401/403',
+            value: String((recentSummary.httpStatusCounts?.['401'] ?? 0) + (recentSummary.httpStatusCounts?.['403'] ?? 0))
+        },
+        {
+            key: 'interrupt',
+            label: translateOrFallback('models.metric.streamInterrupted', '流中断'),
+            value: String(recentSummary.streamInterruptedCount ?? 0)
+        },
+        {
+            key: 'latency',
+            label: translateOrFallback('models.metric.avgLatency', '延迟'),
+            value: formatLatency(recentSummary.avgLatencyMs ?? modelStatus.avgLatencyMs)
+        }
+    ];
+
+    return `
+        <div class="model-item-status-summary">
+            ${metricItems.map(item => `
+                <span class="model-item-status-chip metric-${item.key}">
+                    <span class="metric-label">${escapeHtml(item.label)}</span>
+                    <span class="metric-value">${escapeHtml(item.value)}</span>
+                </span>
+            `).join('')}
+        </div>
+    `;
+}
+
 /**
  * 更新提供商配置
  * @param {Array} configs - 提供商配置列表
@@ -154,7 +238,17 @@ function renderModelsList(models) {
                             ? modelEntry
                             : (modelEntry.displayName || modelEntry.id);
                         const aliases = Array.isArray(modelEntry?.aliases) ? modelEntry.aliases : [];
+                        const modelStatus = typeof modelEntry === 'object' ? modelEntry.modelStatus : null;
+                        const status = String(modelStatus?.status || 'unknown').trim().toLowerCase() || 'unknown';
                         const showMeta = displayName !== canonicalModelId || aliases.length > 0;
+                        const modelStatusBadge = modelStatus
+                            ? `
+                                <span class="model-item-status-badge status-${escapeHtml(status)}">
+                                    ${escapeHtml(formatModelStatusLabel(status))}
+                                </span>
+                            `
+                            : '';
+                        const modelStatusSummary = buildModelStatusSummary(modelStatus);
 
                         return `
                         <div class="model-item" onclick="window.copyModelName('${escapeHtml(canonicalModelId)}', this)" title="${t('models.clickToCopy') || '点击复制'}">
@@ -162,13 +256,17 @@ function renderModelsList(models) {
                                 <i class="fas fa-cube"></i>
                             </div>
                             <div class="model-item-body">
-                                <span class="model-item-name">${escapeHtml(displayName)}</span>
+                                <div class="model-item-title-row">
+                                    <span class="model-item-name">${escapeHtml(displayName)}</span>
+                                    ${modelStatusBadge}
+                                </div>
                                 ${showMeta ? `
                                 <div class="model-item-meta">
                                     ${displayName !== canonicalModelId ? `<code class="model-item-id">${escapeHtml(canonicalModelId)}</code>` : ''}
                                     ${aliases.map(alias => `<span class="model-item-alias">${escapeHtml(alias)}</span>`).join('')}
                                 </div>
                                 ` : ''}
+                                ${modelStatusSummary}
                             </div>
                             <div class="model-item-copy">
                                 <i class="fas fa-copy"></i>

@@ -1,7 +1,7 @@
 import logger from '../utils/logger.js';
 import * as http from 'http';
 import { initializeConfig, CONFIG } from '../core/config-manager.js';
-import { initApiService, autoLinkProviderConfigs, getProviderCatalogManager } from './service-manager.js';
+import { initApiService, autoLinkProviderConfigs, getProviderCatalogManager, getModelStatusManager } from './service-manager.js';
 import { initializeUIManagement } from './ui-manager.js';
 import { initializeAPIManagement } from './api-manager.js';
 import { createRequestHandler } from '../handlers/request-handler.js';
@@ -197,6 +197,10 @@ async function gracefulShutdown() {
 
     try {
         getProviderCatalogManager()?.stop();
+    } catch { /* ignore */ }
+
+    try {
+        await getModelStatusManager()?.stop?.();
     } catch { /* ignore */ }
 
     if (serverInstance) {

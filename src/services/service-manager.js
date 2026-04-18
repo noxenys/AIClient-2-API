@@ -2,6 +2,7 @@ import { getServiceAdapter, serviceInstances } from '../providers/adapter.js';
 import logger from '../utils/logger.js';
 import { ProviderPoolManager } from '../providers/provider-pool-manager.js';
 import { ProviderCatalogManager } from '../providers/provider-catalog-manager.js';
+import { ModelStatusManager } from '../providers/model-status-manager.js';
 import deepmerge from 'deepmerge';
 import * as fs from 'fs';
 import { promises as pfs } from 'fs';
@@ -20,6 +21,7 @@ import { MODEL_PROVIDER } from '../utils/constants.js';
 // 存储 ProviderPoolManager 实例
 let providerPoolManager = null;
 let providerCatalogManager = null;
+let modelStatusManager = null;
 
 /**
  * 扫描 configs 目录并自动关联未关联的配置文件到对应的提供商
@@ -309,10 +311,26 @@ export async function initApiService(config, isReady = false) {
         logger.info('[Initialization] ProviderCatalogManager initialized.');
     }
 
+    if (modelStatusManager) {
+        modelStatusManager.updateContext({
+            globalConfig: config,
+            providerPoolManager,
+            providerCatalogManager
+        });
+    } else {
+        modelStatusManager = new ModelStatusManager({
+            globalConfig: config,
+            providerPoolManager,
+            providerCatalogManager
+        });
+        logger.info('[Initialization] ModelStatusManager initialized.');
+    }
+
     providerPoolManager.setModelCatalogManager(providerCatalogManager);
     await providerCatalogManager.start({
         startupRun: isReady
     });
+    await modelStatusManager.start();
 
     if (config.providerPools && Object.keys(config.providerPools).length > 0) {
         if(isReady){
@@ -560,6 +578,10 @@ export function getProviderPoolManager() {
 
 export function getProviderCatalogManager() {
     return providerCatalogManager;
+}
+
+export function getModelStatusManager() {
+    return modelStatusManager;
 }
 
 /**

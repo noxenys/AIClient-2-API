@@ -9,14 +9,18 @@ function normalizeRegistryPayload(payload) {
             providerModelMap: payload.providerModelMap && typeof payload.providerModelMap === 'object'
                 ? payload.providerModelMap
                 : {},
-            providerTypes: Array.isArray(payload.providerTypes) ? payload.providerTypes : []
+            providerTypes: Array.isArray(payload.providerTypes) ? payload.providerTypes : [],
+            modelStatus: payload.modelStatus && typeof payload.modelStatus === 'object'
+                ? payload.modelStatus
+                : { providers: {} }
         };
     }
 
     return {
         items: [],
         providerModelMap: {},
-        providerTypes: []
+        providerTypes: [],
+        modelStatus: { providers: {} }
     };
 }
 
@@ -68,10 +72,22 @@ export async function getProviderModelEntriesMap(forceRefresh = false) {
     const registry = await fetchModelRegistry(forceRefresh);
     const itemMap = new Map((registry.items || []).map(item => [item.id, item]));
     const providerModelMap = registry.providerModelMap || {};
+    const modelStatusProviders = registry.modelStatus?.providers || {};
     const entriesMap = {};
 
     Object.entries(providerModelMap).forEach(([providerType, modelIds]) => {
-        entriesMap[providerType] = (Array.isArray(modelIds) ? modelIds : []).map(modelId => itemMap.get(modelId) || createFallbackModelEntry(modelId));
+        const providerModelStatus = modelStatusProviders[providerType]?.byModel || {};
+        entriesMap[providerType] = (Array.isArray(modelIds) ? modelIds : []).map(modelId => {
+            const entry = itemMap.get(modelId) || createFallbackModelEntry(modelId);
+            const modelStatus = providerModelStatus[entry.id]
+                || providerModelStatus[entry.actualModel]
+                || providerModelStatus[modelId]
+                || null;
+
+            return modelStatus
+                ? { ...entry, modelStatus }
+                : entry;
+        });
     });
 
     return entriesMap;
