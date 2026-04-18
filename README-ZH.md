@@ -93,6 +93,7 @@
 > <details>
 > <summary>点击展开查看详细版本历史</summary>
 > 
+> - **2026.04.18** - 新增 Grok 自定义模型别名映射示例，可通过 `custom_models.json` 让客户端把 Grok 伪装为 `gpt-5.4` 或 `claude-opus-4.7`
 > - **2026.03.02** - 新增 Grok 协议支持，支持通过 Cookie/SSO 方式访问 xAI Grok 系列模型（Grok 3/4），支持多模态输入、图片/视频生成、自动 token 刷新及流式输出
 > - **2026.01.26** - 新增 Codex 协议支持：支持 OpenAI Codex OAuth 授权接入
 > - **2026.01.25** - 增强 AI 监控插件：支持监控 AI 协议转换前后的请求参数和响应。优化日志管理：统一日志格式，可视化配置
@@ -500,7 +501,69 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
 - 某些账号因配额或权限限制无法访问特定模型
 - 需要为不同账号分配不同的模型访问权限
 
-#### 3. 跨类型 Fallback 配置
+#### 3. 自定义模型别名映射（让 Grok 伪装成 GPT/Claude）
+
+你可以通过自定义模型配置，把真实的 Grok 模型暴露成另一个上游模型名。这适合只能接受 `gpt-5.4` 或 `claude-opus-4.7` 这类名称的客户端，但实际请求仍然落到 `grok-custom`。
+
+**重要说明**：
+- 这只是模型名 / 协议别名映射，不是能力等价替代，后端实际还是 Grok。
+- `actualModel` 必须填写 `grok-custom` 真实支持的模型名，例如 `grok-4.20` 或 `grok-4.1-thinking`。
+- 如果你要明确走 Grok 路由，`provider` 直接写 `grok-custom`。
+- 如果你希望在 `auto` 模式下也能直接命中这个别名，可以把 `provider` 留空，只保留 `actualProvider: "grok-custom"`。
+
+**示例**：在 `configs/custom_models.json` 中加入以下配置
+
+```json
+[
+  {
+    "id": "grok-as-gpt-5.4",
+    "name": "GPT-5.4 via Grok",
+    "alias": "gpt-5.4",
+    "provider": "grok-custom",
+    "actualProvider": "grok-custom",
+    "actualModel": "grok-4.20",
+    "description": "Expose Grok as gpt-5.4"
+  },
+  {
+    "id": "grok-as-claude-opus-4.7",
+    "name": "Claude Opus 4.7 via Grok",
+    "alias": "claude-opus-4.7",
+    "provider": "grok-custom",
+    "actualProvider": "grok-custom",
+    "actualModel": "grok-4.1-thinking",
+    "description": "Expose Grok as claude-opus-4.7"
+  }
+]
+```
+
+**OpenAI 兼容请求**：
+```bash
+curl http://localhost:3000/api/provider/grok-custom/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "gpt-5.4",
+    "messages": [
+      { "role": "user", "content": "请直接回答你实际使用的后端。" }
+    ]
+  }'
+```
+
+**Claude 兼容请求**：
+```bash
+curl http://localhost:3000/api/provider/grok-custom/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "claude-opus-4.7",
+    "max_tokens": 512,
+    "messages": [
+      { "role": "user", "content": "请直接回答你实际使用的后端。" }
+    ]
+  }'
+```
+
+#### 4. 跨类型 Fallback 配置
 
 当某一 Provider Type（如 `gemini-cli-oauth`）下的所有账号都因 429 配额耗尽或被标记为 unhealthy 时，系统能够自动 fallback 到另一个兼容的 Provider Type（如 `gemini-antigravity`），而不是直接返回错误。
 
@@ -534,7 +597,7 @@ curl http://localhost:3000/claude-kiro-oauth/v1/chat/completions \
 - Fallback 只会在协议兼容的类型之间进行（如 `gemini-*` 之间、`claude-*` 之间）
 - 系统会自动检查目标 Provider Type 是否支持当前请求的模型
 
-#### 4. TLS Sidecar (Bypass 403/Cloudflare)
+#### 5. TLS Sidecar (Bypass 403/Cloudflare)
 
 针对 Grok 等对 TLS 指纹（JA3/JA4）校验严格的服务，本项目集成了基于 Go uTLS 的 Sidecar 代理，通过模拟浏览器 TLS 特征有效解决 403 Forbidden 报错。
 

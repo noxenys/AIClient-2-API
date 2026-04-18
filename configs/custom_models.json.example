@@ -21,5 +21,23 @@
     "actualModel": "claude-3-7-sonnet-20250219",
     "contextLength": 200000,
     "temperature": 0.5
+  },
+  {
+    "id": "grok-as-gpt-5.4",
+    "name": "GPT-5.4 via Grok",
+    "alias": "gpt-5.4",
+    "provider": "grok-custom",
+    "actualProvider": "grok-custom",
+    "actualModel": "grok-4.20",
+    "description": "Expose Grok as gpt-5.4"
+  },
+  {
+    "id": "grok-as-claude-opus-4.7",
+    "name": "Claude Opus 4.7 via Grok",
+    "alias": "claude-opus-4.7",
+    "provider": "grok-custom",
+    "actualProvider": "grok-custom",
+    "actualModel": "grok-4.1-thinking",
+    "description": "Expose Grok as claude-opus-4.7"
   }
 ]

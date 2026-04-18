@@ -94,6 +94,7 @@
 > <details>
 > <summary>Click to expand detailed version history</summary>
 > 
+> - **2026.04.18** - Added Grok custom model alias mapping examples, allowing clients to expose Grok as `gpt-5.4` or `claude-opus-4.7` through `custom_models.json`
 > - **2026.03.02** - Added Grok protocol support, supporting access to xAI Grok series models (Grok 3/4) via Cookie/SSO, supporting multimodal input, image/video generation, automatic token refresh and streaming output
 > - **2026.01.26** - Added Codex protocol support: supports OpenAI Codex OAuth authorization access
 > - **2026.01.25** - Enhanced AI Monitor plugin: supports monitoring request parameters and responses before and after AI protocol conversion. Optimized log management: unified log format, visual configuration
@@ -502,7 +503,69 @@ Support excluding unsupported models through `notSupportedModels` configuration,
 - Some accounts cannot access specific models due to quota or permission restrictions
 - Need to assign different model access permissions to different accounts
 
-#### 3. Cross-Type Fallback Configuration
+#### 3. Custom Model Alias Mapping (Expose Grok as GPT/Claude)
+
+You can use custom model definitions to expose a real Grok model under a different upstream-facing model name. This is useful when a client only accepts names like `gpt-5.4` or `claude-opus-4.7`, but you want the request to land on `grok-custom`.
+
+**Important Notes**:
+- This is only model-name / protocol aliasing, not capability equivalence. The backend is still Grok.
+- `actualModel` must be a model actually supported by `grok-custom`, such as `grok-4.20` or `grok-4.1-thinking`.
+- For explicit provider routing, set `provider` to `grok-custom`.
+- If you want the alias to also match in `auto` mode, you can leave `provider` empty and keep `actualProvider` as `grok-custom`.
+
+**Example**: add entries to `configs/custom_models.json`
+
+```json
+[
+  {
+    "id": "grok-as-gpt-5.4",
+    "name": "GPT-5.4 via Grok",
+    "alias": "gpt-5.4",
+    "provider": "grok-custom",
+    "actualProvider": "grok-custom",
+    "actualModel": "grok-4.20",
+    "description": "Expose Grok as gpt-5.4"
+  },
+  {
+    "id": "grok-as-claude-opus-4.7",
+    "name": "Claude Opus 4.7 via Grok",
+    "alias": "claude-opus-4.7",
+    "provider": "grok-custom",
+    "actualProvider": "grok-custom",
+    "actualModel": "grok-4.1-thinking",
+    "description": "Expose Grok as claude-opus-4.7"
+  }
+]
+```
+
+**OpenAI-compatible request**:
+```bash
+curl http://localhost:3000/api/provider/grok-custom/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "gpt-5.4",
+    "messages": [
+      { "role": "user", "content": "Reply with the actual backend you are using." }
+    ]
+  }'
+```
+
+**Claude-compatible request**:
+```bash
+curl http://localhost:3000/api/provider/grok-custom/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-key" \
+  -d '{
+    "model": "claude-opus-4.7",
+    "max_tokens": 512,
+    "messages": [
+      { "role": "user", "content": "Reply with the actual backend you are using." }
+    ]
+  }'
+```
+
+#### 4. Cross-Type Fallback Configuration
 
 When all accounts under a Provider Type (e.g., `gemini-cli-oauth`) are exhausted due to 429 quota limits or marked as unhealthy, the system can automatically fallback to another compatible Provider Type (e.g., `gemini-antigravity`) instead of returning an error directly.
 
@@ -536,7 +599,7 @@ When all accounts under a Provider Type (e.g., `gemini-cli-oauth`) are exhausted
 - Fallback only occurs between protocol-compatible types (e.g., between `gemini-*`, between `claude-*`)
 - The system automatically checks if the target Provider Type supports the requested model
 
-#### 4. TLS Sidecar (Bypass 403/Cloudflare)
+#### 5. TLS Sidecar (Bypass 403/Cloudflare)
 
 For services like Grok that strictly validate TLS fingerprints (JA3/JA4), this project integrates a Sidecar proxy based on Go uTLS, which effectively solves 403 Forbidden errors by simulating browser TLS features.
 
