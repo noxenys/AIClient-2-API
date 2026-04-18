@@ -93,6 +93,7 @@
 > <details>
 > <summary>点击展开查看详细版本历史</summary>
 > 
+> - **2026.04.19** - 修复部署端口兼容性：服务主监听与健康检查现在会自动识别 `PORT`/`SERVER_PORT`，降低 Zeabur 等 PaaS 重启窗口内的短时 502
 > - **2026.04.18** - 新增 Grok 自定义模型别名映射示例，可通过 `custom_models.json` 让客户端把 Grok 伪装为 `gpt-5.4` 或 `claude-opus-4.7`
 > - **2026.03.02** - 新增 Grok 协议支持，支持通过 Cookie/SSO 方式访问 xAI Grok 系列模型（Grok 3/4），支持多模态输入、图片/视频生成、自动 token 刷新及流式输出
 > - **2026.01.26** - 新增 Codex 协议支持：支持 OpenAI Codex OAuth 授权接入

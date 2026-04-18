@@ -7,7 +7,7 @@ import http from 'http';
 
 // 从环境变量获取主机和端口，如果没有设置则使用默认值
 const HOST = process.env.HOST || 'localhost';
-const PORT = process.env.SERVER_PORT || 3000;
+const PORT = Number.parseInt(process.env.PORT || process.env.SERVER_PORT || '3000', 10);
 
 // 发送HTTP请求到健康检查端点
 const options = {

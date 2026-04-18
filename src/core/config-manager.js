@@ -9,6 +9,37 @@ export let PROMPT_LOG_FILENAME = ''; // Make PROMPT_LOG_FILENAME exportable
 
 const ALL_MODEL_PROVIDERS = Object.values(MODEL_PROVIDER);
 
+function parsePositiveIntEnv(name) {
+    const rawValue = process.env[name];
+    if (rawValue == null || rawValue === '') {
+        return null;
+    }
+
+    const parsedValue = Number.parseInt(rawValue, 10);
+    if (!Number.isInteger(parsedValue) || parsedValue <= 0) {
+        logger.warn(`[Config Warning] Ignoring invalid ${name} environment value: ${rawValue}`);
+        return null;
+    }
+
+    return parsedValue;
+}
+
+function applyEnvironmentOverrides(config) {
+    const platformPort = parsePositiveIntEnv('PORT');
+    const configuredServerPort = parsePositiveIntEnv('SERVER_PORT');
+
+    if (platformPort != null) {
+        config.SERVER_PORT = platformPort;
+        logger.info(`[Config] Using PORT from environment: ${platformPort}`);
+        return;
+    }
+
+    if (configuredServerPort != null) {
+        config.SERVER_PORT = configuredServerPort;
+        logger.info(`[Config] Using SERVER_PORT from environment: ${configuredServerPort}`);
+    }
+}
+
 function normalizeConfiguredProviders(config) {
     const fallbackProvider = MODEL_PROVIDER.GEMINI_CLI;
     const dedupedProviders = [];
@@ -119,6 +150,8 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
             logger.info('[Config] configs/config.json not found, using default configuration.');
         }
     }
+
+    applyEnvironmentOverrides(currentConfig);
 
 
     // CLI argument definitions: { flag, configKey, type, validValues? }
