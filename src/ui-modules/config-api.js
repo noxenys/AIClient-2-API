@@ -82,6 +82,7 @@ export async function handleGetConfig(req, res, currentConfig) {
         PROVIDER_CATALOG_STARTUP_REFRESH: currentConfig.PROVIDER_CATALOG_STARTUP_REFRESH,
         PROVIDER_CATALOG_SAMPLE_LIMIT: currentConfig.PROVIDER_CATALOG_SAMPLE_LIMIT,
         PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS: currentConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS,
+        PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD: currentConfig.PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD,
         SYSTEM_PROMPT_REPLACEMENTS: currentConfig.SYSTEM_PROMPT_REPLACEMENTS,
         WARMUP_TARGET: currentConfig.WARMUP_TARGET,
         REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,
@@ -182,6 +183,7 @@ export async function handleUpdateConfig(req, res, currentConfig) {
         if (newConfig.PROVIDER_CATALOG_STARTUP_REFRESH !== undefined) currentConfig.PROVIDER_CATALOG_STARTUP_REFRESH = newConfig.PROVIDER_CATALOG_STARTUP_REFRESH;
         if (newConfig.PROVIDER_CATALOG_SAMPLE_LIMIT !== undefined) currentConfig.PROVIDER_CATALOG_SAMPLE_LIMIT = newConfig.PROVIDER_CATALOG_SAMPLE_LIMIT;
         if (newConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS !== undefined) currentConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS = newConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS;
+        if (newConfig.PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD !== undefined) currentConfig.PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD = newConfig.PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD;
         if (newConfig.WARMUP_TARGET !== undefined) currentConfig.WARMUP_TARGET = newConfig.WARMUP_TARGET;
         if (newConfig.REFRESH_CONCURRENCY_PER_PROVIDER !== undefined) currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER = newConfig.REFRESH_CONCURRENCY_PER_PROVIDER;
         if (newConfig.providerFallbackChain !== undefined) currentConfig.providerFallbackChain = newConfig.providerFallbackChain;
@@ -320,6 +322,7 @@ export async function handleUpdateConfig(req, res, currentConfig) {
                 PROVIDER_CATALOG_STARTUP_REFRESH: currentConfig.PROVIDER_CATALOG_STARTUP_REFRESH,
                 PROVIDER_CATALOG_SAMPLE_LIMIT: currentConfig.PROVIDER_CATALOG_SAMPLE_LIMIT,
                 PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS: currentConfig.PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS,
+                PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD: currentConfig.PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD,
                 WARMUP_TARGET: currentConfig.WARMUP_TARGET,
                 REFRESH_CONCURRENCY_PER_PROVIDER: currentConfig.REFRESH_CONCURRENCY_PER_PROVIDER,
                 providerFallbackChain: currentConfig.providerFallbackChain,

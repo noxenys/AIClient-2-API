@@ -1087,7 +1087,7 @@ async function openProviderManager(providerType, searchTerm = '') {
     try {
         const params = new URLSearchParams();
         params.set('page', '1');
-        params.set('pageSize', '5');
+        params.set('pageSize', '20');
         if (searchTerm.trim()) {
             params.set('search', searchTerm.trim());
         }

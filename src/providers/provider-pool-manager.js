@@ -9,7 +9,8 @@ import {
     getCustomModelListProvider,
     getPreferredHealthCheckModel,
     getProviderModels,
-    normalizeModelIds
+    normalizeModelIds,
+    usesDynamicHealthCheckModel
 } from './provider-models.js';
 import { isModelCatalogRefreshError } from './provider-catalog-manager.js';
 import { broadcastEvent } from '../ui-modules/event-broadcast.js';
@@ -2660,7 +2661,8 @@ export class ProviderPoolManager {
 
         if (modelName &&
             modelName !== providerConfig.checkModelName &&
-            (!providerConfig.checkModelName || !configuredModels.includes(providerConfig.checkModelName))) {
+            !usesDynamicHealthCheckModel(providerType, providerConfig.checkModelName) &&
+            !configuredModels.includes(providerConfig.checkModelName)) {
             providerConfig.checkModelName = modelName;
         }
 
@@ -2679,6 +2681,29 @@ export class ProviderPoolManager {
             MODEL_PROVIDER: providerType
         };
         const serviceAdapter = getServiceAdapter(tempConfig);
+
+        if (providerType === 'grok-custom' && typeof serviceAdapter.getUsageLimits === 'function') {
+            try {
+                const usage = await serviceAdapter.getUsageLimits();
+                const remaining = Number(usage?.remaining);
+                if (Number.isFinite(remaining) && remaining <= 0) {
+                    return {
+                        success: false,
+                        modelName,
+                        errorMessage: 'Grok rate limit reached (remaining 0)'
+                    };
+                }
+
+                return { success: true, modelName, errorMessage: null };
+            } catch (error) {
+                this._log('warn', `[HealthCheck] grok-custom lightweight probe failed: ${error.message}`);
+                return {
+                    success: false,
+                    modelName,
+                    errorMessage: error?.message || 'Grok lightweight probe failed'
+                };
+            }
+        }
 
         // 获取所有可能的请求格式
         const healthCheckRequests = this._buildHealthCheckRequests(providerType, modelName);

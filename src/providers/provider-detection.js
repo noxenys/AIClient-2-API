@@ -35,6 +35,7 @@ const MODEL_SOURCE_FETCH_HEADERS = {
     'accept-language': 'en-US,en;q=0.9'
 };
 const MODEL_SOURCE_CACHE = new Map();
+const GROK_MODE_ERROR_COOLDOWN_MS = 10 * 60 * 1000;
 const CODEX_OFFICIAL_MODEL_DOC_URLS = [
     'https://developers.openai.com/codex/models',
     'https://developers.openai.com/api/docs/models/all/'
@@ -313,10 +314,31 @@ async function resolveGrokProviderConfig(providerConfig = {}) {
     return providerConfig;
 }
 
+function buildGrokModesCacheKey(providerConfig = {}, resolvedConfig = {}) {
+    const token = String(
+        resolvedConfig.GROK_COOKIE_TOKEN ||
+        providerConfig.GROK_COOKIE_TOKEN ||
+        ''
+    ).trim();
+    const baseUrl = String(
+        resolvedConfig.GROK_BASE_URL ||
+        providerConfig.GROK_BASE_URL ||
+        'https://grok.com'
+    ).trim().toLowerCase();
+
+    return `grok:modes:${baseUrl}:${token}`;
+}
+
 async function detectGrokModels(providerConfig = {}) {
     const resolvedConfig = await resolveGrokProviderConfig(providerConfig);
     if (!resolvedConfig.GROK_COOKIE_TOKEN) {
         return [];
+    }
+
+    const cacheKey = buildGrokModesCacheKey(providerConfig, resolvedConfig);
+    const cachedModels = getCachedModelSource(cacheKey);
+    if (cachedModels !== null) {
+        return cachedModels;
     }
 
     try {
@@ -331,8 +353,15 @@ async function detectGrokModels(providerConfig = {}) {
             timeout: 30000
         });
 
-        return extractGrokModelsFromModesResponse(response?.data);
+        const models = extractGrokModelsFromModesResponse(response?.data);
+        setCachedModelSource(
+            cacheKey,
+            models,
+            models.length > 0 ? MODEL_SOURCE_CACHE_TTL_MS : GROK_MODE_ERROR_COOLDOWN_MS
+        );
+        return models;
     } catch {
+        setCachedModelSource(cacheKey, [], GROK_MODE_ERROR_COOLDOWN_MS);
         return [];
     }
 }
@@ -429,6 +458,10 @@ export async function detectAvailableModelsForProvider(providerType, tempConfig 
         const grokModels = await detectGrokModels(tempConfig);
         if (grokModels.length > 0) {
             return grokModels;
+        }
+        const configuredModels = normalizeModelIds(tempConfig.supportedModels);
+        if (configuredModels.length > 0) {
+            return configuredModels;
         }
         return normalizeModelIds(getProviderModels(providerType));
     }

@@ -148,7 +148,7 @@ export const DEFAULT_PROVIDER_HEALTH_CHECK_MODELS = Object.freeze({
     'gemini-antigravity': 'gemini-2.5-flash',
     'openai-custom': 'gpt-4o-mini',
     'claude-custom': 'claude-3-7-sonnet-20250219',
-    'claude-kiro-oauth': 'claude-haiku-4-5',
+    'claude-kiro-oauth': 'claude-haiku-4-5-20251001',
     'openai-qwen-oauth': 'qwen3-coder-flash',
     'openai-iflow': 'qwen3-coder-plus',
     'openai-codex-oauth': 'gpt-5.4-mini',
@@ -159,6 +159,51 @@ export const DEFAULT_PROVIDER_HEALTH_CHECK_MODELS = Object.freeze({
 
 const LIGHTWEIGHT_HEALTH_CHECK_HINTS = ['flash', 'mini', 'haiku', 'small', 'nano', 'lite', 'fast', '3.5'];
 const PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES = Object.freeze({
+    'gemini-cli-oauth': [
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-3-flash-preview',
+        'gemini-3.1-flash-lite-preview'
+    ],
+    'gemini-antigravity': [
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-3-flash-agent',
+        'gemini-3-flash'
+    ],
+    'claude-kiro-oauth': [
+        'claude-haiku-4-5-20251001',
+        'claude-haiku-4-5',
+        'claude-sonnet-4-6',
+        'claude-sonnet-4-5-20250929',
+        'claude-sonnet-4-5',
+        'claude-sonnet-4-20250514',
+        'claude-opus-4-7',
+        'claude-opus-4-6',
+        'claude-opus-4-5',
+        'claude-opus-4-5-20251101'
+    ],
+    'openai-qwen-oauth': [
+        'qwen3-coder-flash',
+        'qwen3-coder-plus',
+        'coder-model',
+        'vision-model'
+    ],
+    'openai-iflow': [
+        'qwen3-coder-plus',
+        'qwen3-max',
+        'glm-5',
+        'kimi-k2.5',
+        'glm-4.7',
+        'deepseek-v3.2'
+    ],
+    'openai-codex-oauth': [
+        'gpt-5.4-mini',
+        'gpt-5.4',
+        'gpt-5.3-codex-spark',
+        'gpt-5.3-codex',
+        'gpt-5.2'
+    ],
     'grok-custom': [
         'grok-4.20',
         'grok-4.20-auto',
@@ -168,6 +213,12 @@ const PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES = Object.freeze({
         'grok-4.1-mini',
         'grok-4.1-thinking'
     ]
+});
+const LEGACY_AUTO_HEALTH_CHECK_MODELS = Object.freeze({
+    'claude-kiro-oauth': ['claude-haiku-4-5'],
+    'openai-codex-oauth': ['gpt-5-codex-mini', 'gpt-5.2-codex'],
+    'gemini-antigravity': ['gemini-2.5-computer-use-preview-10-2025'],
+    'openai-iflow': ['gpt-4o']
 });
 
 function getProviderSpecificPreferenceList(providerType = '') {
@@ -182,6 +233,18 @@ function getProviderSpecificPreferenceList(providerType = '') {
     return baseType ? PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES[baseType] : [];
 }
 
+function getLegacyAutoHealthCheckModels(providerType = '') {
+    const direct = LEGACY_AUTO_HEALTH_CHECK_MODELS[providerType];
+    if (direct) {
+        return direct;
+    }
+
+    const baseType = Object.keys(LEGACY_AUTO_HEALTH_CHECK_MODELS).find(key =>
+        providerType === key || providerType.startsWith(`${key}-`)
+    );
+    return baseType ? LEGACY_AUTO_HEALTH_CHECK_MODELS[baseType] : [];
+}
+
 export function getDefaultHealthCheckModel(providerType = '') {
     const direct = DEFAULT_PROVIDER_HEALTH_CHECK_MODELS[providerType];
     if (direct) {
@@ -194,12 +257,28 @@ export function getDefaultHealthCheckModel(providerType = '') {
     return baseType ? DEFAULT_PROVIDER_HEALTH_CHECK_MODELS[baseType] : '';
 }
 
+export function usesDynamicHealthCheckModel(providerType, currentCheckModel = '') {
+    const normalizedCurrent = typeof currentCheckModel === 'string' ? currentCheckModel.trim() : '';
+    if (!normalizedCurrent) {
+        return true;
+    }
+
+    return getLegacyAutoHealthCheckModels(providerType).includes(normalizedCurrent);
+}
+
 export function getPreferredHealthCheckModel(providerType, models = [], currentCheckModel = '') {
     const normalizedModels = normalizeModelIds(models);
     const normalizedCurrent = typeof currentCheckModel === 'string' ? currentCheckModel.trim() : '';
+    const usesDynamicSelection = usesDynamicHealthCheckModel(providerType, normalizedCurrent);
 
-    if (normalizedCurrent && normalizedModels.includes(normalizedCurrent)) {
+    if (!usesDynamicSelection && normalizedCurrent && normalizedModels.includes(normalizedCurrent)) {
         return normalizedCurrent;
+    }
+
+    const providerSpecificModel = getProviderSpecificPreferenceList(providerType)
+        .find(model => normalizedModels.includes(model));
+    if (providerSpecificModel) {
+        return providerSpecificModel;
     }
 
     const defaultModel = getDefaultHealthCheckModel(providerType);
@@ -209,12 +288,6 @@ export function getPreferredHealthCheckModel(providerType, models = [], currentC
 
     if (normalizedCurrent && normalizedModels.length === 0) {
         return normalizedCurrent;
-    }
-
-    const providerSpecificModel = getProviderSpecificPreferenceList(providerType)
-        .find(model => normalizedModels.includes(model));
-    if (providerSpecificModel) {
-        return providerSpecificModel;
     }
 
     const lightweightModel = normalizedModels.find(model =>

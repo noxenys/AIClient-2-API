@@ -12,7 +12,9 @@ const DEFAULT_CATALOG_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_CATALOG_SAMPLE_LIMIT = 3;
 const MAX_CATALOG_SAMPLE_LIMIT = 10;
 const DEFAULT_ERROR_REFRESH_DELAY_MS = 5000;
-const CATALOG_VERSION = 1;
+const DEFAULT_MODEL_MISSING_THRESHOLD = 2;
+const CATALOG_VERSION = 2;
+const MODEL_OBSERVATION_STATUS = new Set(['active', 'missing', 'removed']);
 
 const MODEL_REFRESH_ERROR_PATTERNS = [
     /\bmodel[_\s-]?not[_\s-]?found\b/i,
@@ -42,9 +44,15 @@ function resolveCatalogFilePath(globalConfig = {}) {
 
 function inferCatalogSource(providerType, providerConfig = {}) {
     if (providerType === 'openai-codex-oauth') {
-        return (providerConfig.CODEX_PLAN_TYPE || providerConfig.plan_type || providerConfig.CODEX_OAUTH_CREDS_FILE_PATH)
-            ? 'plan_inference'
-            : 'native_api';
+        return 'official_docs_or_plan';
+    }
+
+    if (providerType === 'claude-kiro-oauth') {
+        return 'official_docs';
+    }
+
+    if (providerType === 'openai-qwen-oauth') {
+        return 'live_models_api';
     }
 
     if (providerType === 'grok-custom') {
@@ -62,12 +70,120 @@ function buildEmptyCatalog() {
     };
 }
 
-function normalizeCatalogEntry(providerType, entry = {}, refreshIntervalMs = DEFAULT_CATALOG_REFRESH_INTERVAL_MS) {
+function normalizeObservationStatus(status = 'active') {
+    const normalizedStatus = String(status || 'active').trim().toLowerCase();
+    return MODEL_OBSERVATION_STATUS.has(normalizedStatus) ? normalizedStatus : 'active';
+}
+
+function buildModelObservation(modelId, observation = {}, fallbackTimestamp = null) {
+    const lastSeenAt = observation.lastSeenAt || fallbackTimestamp || null;
+    const firstSeenAt = observation.firstSeenAt || lastSeenAt || fallbackTimestamp || null;
+    const status = normalizeObservationStatus(observation.status || (observation.removedAt ? 'removed' : 'active'));
+
+    return {
+        modelId,
+        firstSeenAt,
+        lastSeenAt,
+        seenCount: Math.max(0, Number(observation.seenCount || 0)),
+        lastMissingAt: observation.lastMissingAt || null,
+        missingCount: Math.max(0, Number(observation.missingCount || 0)),
+        removedAt: observation.removedAt || null,
+        status
+    };
+}
+
+function buildObservationsMap(entry = {}) {
+    const fallbackTimestamp = entry.lastSuccessfulRefreshedAt || entry.refreshedAt || null;
+    const byModel = {};
+    const rawByModel = entry?.observations?.byModel;
+
+    if (rawByModel && typeof rawByModel === 'object') {
+        Object.entries(rawByModel).forEach(([modelId, observation]) => {
+            const normalizedModelId = String(modelId || '').trim();
+            if (!normalizedModelId) {
+                return;
+            }
+
+            byModel[normalizedModelId] = buildModelObservation(normalizedModelId, observation, fallbackTimestamp);
+        });
+    }
+
+    normalizeModelIds(entry.models).forEach(modelId => {
+        if (!byModel[modelId]) {
+            byModel[modelId] = buildModelObservation(modelId, {
+                firstSeenAt: fallbackTimestamp,
+                lastSeenAt: fallbackTimestamp,
+                seenCount: 1,
+                missingCount: 0,
+                status: 'active'
+            }, fallbackTimestamp);
+        }
+    });
+
+    normalizeModelIds(entry.removedModels).forEach(modelId => {
+        if (!byModel[modelId]) {
+            byModel[modelId] = buildModelObservation(modelId, {
+                firstSeenAt: fallbackTimestamp,
+                lastMissingAt: fallbackTimestamp,
+                missingCount: Number(entry.missingThreshold || DEFAULT_MODEL_MISSING_THRESHOLD),
+                removedAt: fallbackTimestamp,
+                status: 'removed'
+            }, fallbackTimestamp);
+        }
+    });
+
+    return byModel;
+}
+
+function deriveCatalogModelsFromObservations(byModel = {}) {
+    return normalizeModelIds(
+        Object.values(byModel)
+            .filter(observation => observation.status !== 'removed')
+            .map(observation => observation.modelId)
+    );
+}
+
+function buildObservationSummary(byModel = {}) {
+    return Object.values(byModel).reduce((summary, observation) => {
+        if (observation.status === 'active') {
+            summary.activeModelCount++;
+        } else if (observation.status === 'missing') {
+            summary.pendingRemovalCount++;
+        } else if (observation.status === 'removed') {
+            summary.removedModelCount++;
+        }
+
+        return summary;
+    }, {
+        activeModelCount: 0,
+        pendingRemovalCount: 0,
+        removedModelCount: 0
+    });
+}
+
+function normalizeCatalogEntry(
+    providerType,
+    entry = {},
+    refreshIntervalMs = DEFAULT_CATALOG_REFRESH_INTERVAL_MS,
+    missingThreshold = DEFAULT_MODEL_MISSING_THRESHOLD
+) {
+    const normalizedThreshold = clampInteger(
+        entry.missingThreshold,
+        missingThreshold,
+        { min: 1, max: 30 }
+    );
+    const observationsByModel = buildObservationsMap(entry);
+    const models = deriveCatalogModelsFromObservations(observationsByModel);
+    const summary = buildObservationSummary(observationsByModel);
     const normalizedEntry = {
         providerType,
-        models: normalizeModelIds(entry.models),
+        models,
+        lastDetectedModels: normalizeModelIds(entry.lastDetectedModels || models),
+        addedModels: normalizeModelIds(entry.addedModels),
+        removedModels: normalizeModelIds(entry.removedModels),
         source: entry.source || 'fallback_seed',
         refreshedAt: entry.refreshedAt || null,
+        lastSuccessfulRefreshedAt: entry.lastSuccessfulRefreshedAt || entry.refreshedAt || null,
         staleAt: entry.staleAt || null,
         status: entry.status || 'unknown',
         successCount: Number(entry.successCount || 0),
@@ -75,7 +191,14 @@ function normalizeCatalogEntry(providerType, entry = {}, refreshIntervalMs = DEF
         sampledProviders: Array.isArray(entry.sampledProviders) ? entry.sampledProviders.filter(Boolean) : [],
         lastError: entry.lastError || null,
         errors: Array.isArray(entry.errors) ? entry.errors.filter(Boolean) : [],
-        lastRefreshReason: entry.lastRefreshReason || null
+        lastRefreshReason: entry.lastRefreshReason || null,
+        missingThreshold: normalizedThreshold,
+        activeModelCount: summary.activeModelCount,
+        pendingRemovalCount: summary.pendingRemovalCount,
+        removedModelCount: summary.removedModelCount,
+        observations: {
+            byModel: observationsByModel
+        }
     };
 
     const staleAtMs = normalizedEntry.staleAt ? Date.parse(normalizedEntry.staleAt) : NaN;
@@ -87,6 +210,75 @@ function normalizeCatalogEntry(providerType, entry = {}, refreshIntervalMs = DEF
     }
 
     return normalizedEntry;
+}
+
+function cloneObservationMap(byModel = {}) {
+    const clonedMap = {};
+
+    Object.entries(byModel).forEach(([modelId, observation]) => {
+        clonedMap[modelId] = buildModelObservation(modelId, observation, observation?.lastSeenAt || observation?.firstSeenAt || null);
+    });
+
+    return clonedMap;
+}
+
+function buildNextObservationMap(previousEntry, detectedModels = [], refreshedAt, missingThreshold) {
+    const previousObservations = cloneObservationMap(previousEntry?.observations?.byModel || {});
+    const nextObservations = cloneObservationMap(previousEntry?.observations?.byModel || {});
+    const detectedSet = new Set(detectedModels);
+    const addedModels = [];
+    const removedModels = [];
+
+    detectedModels.forEach(modelId => {
+        const previousObservation = previousObservations[modelId];
+        const wasRemoved = previousObservation?.status === 'removed';
+
+        nextObservations[modelId] = buildModelObservation(modelId, {
+            firstSeenAt: previousObservation?.firstSeenAt || refreshedAt,
+            lastSeenAt: refreshedAt,
+            seenCount: Number(previousObservation?.seenCount || 0) + 1,
+            lastMissingAt: previousObservation?.lastMissingAt || null,
+            missingCount: 0,
+            removedAt: null,
+            status: 'active'
+        }, refreshedAt);
+
+        if (!previousObservation || wasRemoved) {
+            addedModels.push(modelId);
+        }
+    });
+
+    Object.entries(previousObservations).forEach(([modelId, previousObservation]) => {
+        if (detectedSet.has(modelId)) {
+            return;
+        }
+
+        if (previousObservation.status === 'removed') {
+            nextObservations[modelId] = buildModelObservation(modelId, previousObservation, refreshedAt);
+            return;
+        }
+
+        const nextMissingCount = Number(previousObservation.missingCount || 0) + 1;
+        const nextStatus = nextMissingCount >= missingThreshold ? 'removed' : 'missing';
+
+        nextObservations[modelId] = buildModelObservation(modelId, {
+            ...previousObservation,
+            lastMissingAt: refreshedAt,
+            missingCount: nextMissingCount,
+            removedAt: nextStatus === 'removed' ? refreshedAt : null,
+            status: nextStatus
+        }, refreshedAt);
+
+        if (nextStatus === 'removed') {
+            removedModels.push(modelId);
+        }
+    });
+
+    return {
+        byModel: nextObservations,
+        addedModels: normalizeModelIds(addedModels),
+        removedModels: normalizeModelIds(removedModels)
+    };
 }
 
 export function isModelCatalogRefreshError(message = '') {
@@ -149,6 +341,14 @@ export class ProviderCatalogManager {
         );
     }
 
+    getModelMissingThreshold() {
+        return clampInteger(
+            this.globalConfig?.PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD,
+            DEFAULT_MODEL_MISSING_THRESHOLD,
+            { min: 1, max: 30 }
+        );
+    }
+
     getCatalogFilePath() {
         return resolveCatalogFilePath(this.globalConfig);
     }
@@ -167,10 +367,11 @@ export class ProviderCatalogManager {
         try {
             const payload = JSON.parse(readFileSync(filePath, 'utf8'));
             const refreshIntervalMs = this.getRefreshIntervalMs();
+            const missingThreshold = this.getModelMissingThreshold();
             const providers = {};
 
             Object.entries(payload?.providers || {}).forEach(([providerType, entry]) => {
-                providers[providerType] = normalizeCatalogEntry(providerType, entry, refreshIntervalMs);
+                providers[providerType] = normalizeCatalogEntry(providerType, entry, refreshIntervalMs, missingThreshold);
             });
 
             this.catalog = {
@@ -207,8 +408,9 @@ export class ProviderCatalogManager {
 
     getProviderEntry(providerType) {
         const refreshIntervalMs = this.getRefreshIntervalMs();
+        const missingThreshold = this.getModelMissingThreshold();
         const entry = this.catalog?.providers?.[providerType];
-        return entry ? normalizeCatalogEntry(providerType, entry, refreshIntervalMs) : null;
+        return entry ? normalizeCatalogEntry(providerType, entry, refreshIntervalMs, missingThreshold) : null;
     }
 
     getProviderModels(providerType) {
@@ -228,12 +430,13 @@ export class ProviderCatalogManager {
 
     getCatalogPayload(providerTypes = null) {
         const refreshIntervalMs = this.getRefreshIntervalMs();
+        const missingThreshold = this.getModelMissingThreshold();
         const providers = {};
 
         this.getKnownProviderTypes(providerTypes).forEach(providerType => {
             const entry = this.catalog?.providers?.[providerType];
             if (entry) {
-                providers[providerType] = normalizeCatalogEntry(providerType, entry, refreshIntervalMs);
+                providers[providerType] = normalizeCatalogEntry(providerType, entry, refreshIntervalMs, missingThreshold);
             }
         });
 
@@ -241,6 +444,7 @@ export class ProviderCatalogManager {
             version: this.catalog?.version || CATALOG_VERSION,
             updatedAt: this.catalog?.updatedAt || null,
             refreshIntervalMs,
+            modelMissingThreshold: missingThreshold,
             filePath: this.globalConfig?.PROVIDER_CATALOG_CACHE_FILE_PATH || 'configs/provider_catalog_cache.json',
             providers
         };
@@ -335,7 +539,14 @@ export class ProviderCatalogManager {
         await this.loadCache();
 
         const refreshIntervalMs = this.getRefreshIntervalMs();
+        const missingThreshold = this.getModelMissingThreshold();
         const previousEntry = this.getProviderEntry(providerType);
+        if (reason === 'startup' &&
+            providerType === 'grok-custom' &&
+            previousEntry?.models?.length > 0 &&
+            previousEntry.isStale === false) {
+            return previousEntry;
+        }
         const probeCandidates = this._getProbeCandidates(providerType);
         const probeResults = await Promise.all(
             probeCandidates.map((providerConfig, index) => this._probeProviderModels(providerType, providerConfig, index))
@@ -349,11 +560,24 @@ export class ProviderCatalogManager {
         if (successfulResults.length > 0) {
             const mergedModels = normalizeModelIds(successfulResults.flatMap(result => result.models));
             const sources = [...new Set(successfulResults.map(result => result.source))];
+            const { byModel, addedModels, removedModels } = buildNextObservationMap(
+                previousEntry,
+                mergedModels,
+                refreshedAt,
+                missingThreshold
+            );
 
             nextEntry = normalizeCatalogEntry(providerType, {
-                models: mergedModels,
+                models: deriveCatalogModelsFromObservations(byModel),
+                lastDetectedModels: mergedModels,
+                addedModels,
+                removedModels,
+                observations: {
+                    byModel
+                },
                 source: sources.length === 1 ? sources[0] : 'multi_probe',
                 refreshedAt,
+                lastSuccessfulRefreshedAt: refreshedAt,
                 staleAt: new Date(Date.now() + refreshIntervalMs).toISOString(),
                 status: 'ready',
                 successCount: successfulResults.length,
@@ -361,8 +585,9 @@ export class ProviderCatalogManager {
                 sampledProviders: probeResults.map(result => result.uuid).filter(Boolean),
                 lastError: failedResults[0]?.error || null,
                 errors: failedResults.map(result => result.error).filter(Boolean),
-                lastRefreshReason: reason
-            }, refreshIntervalMs);
+                lastRefreshReason: reason,
+                missingThreshold
+            }, refreshIntervalMs, missingThreshold);
         } else {
             const fallbackModels = previousEntry?.models?.length > 0
                 ? previousEntry.models
@@ -372,6 +597,7 @@ export class ProviderCatalogManager {
                 : 'fallback_seed';
 
             nextEntry = normalizeCatalogEntry(providerType, {
+                ...(previousEntry || {}),
                 models: fallbackModels,
                 source: fallbackSource,
                 refreshedAt,
@@ -382,8 +608,9 @@ export class ProviderCatalogManager {
                 sampledProviders: probeResults.map(result => result.uuid).filter(Boolean),
                 lastError: failedResults[0]?.error || null,
                 errors: failedResults.map(result => result.error).filter(Boolean),
-                lastRefreshReason: reason
-            }, refreshIntervalMs);
+                lastRefreshReason: reason,
+                missingThreshold
+            }, refreshIntervalMs, missingThreshold);
         }
 
         this.catalog.providers[providerType] = nextEntry;
@@ -394,6 +621,12 @@ export class ProviderCatalogManager {
             action: 'refresh',
             providerType,
             modelCount: nextEntry.models.length,
+            activeModelCount: nextEntry.activeModelCount,
+            pendingRemovalCount: nextEntry.pendingRemovalCount,
+            removedModelCount: nextEntry.removedModelCount,
+            addedModels: nextEntry.addedModels,
+            removedModels: nextEntry.removedModels,
+            missingThreshold: nextEntry.missingThreshold,
             source: nextEntry.source,
             status: nextEntry.status,
             reason,

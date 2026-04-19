@@ -114,6 +114,7 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         PROVIDER_CATALOG_STARTUP_REFRESH: true,
         PROVIDER_CATALOG_SAMPLE_LIMIT: 3,
         PROVIDER_CATALOG_ERROR_REFRESH_DELAY_MS: 5000,
+        PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD: 2,
         MODEL_STATUS_CACHE_FILE_PATH: 'configs/model_status_cache.json',
         MODEL_STATUS_PERSIST_INTERVAL_MS: 10 * 1000,
         MODEL_STATUS_RECENT_WINDOW_SIZE: 20,

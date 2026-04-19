@@ -15,7 +15,7 @@ const MANAGED_MODEL_LIST_PROVIDERS = new Set([
 ]);
 
 // 分页配置
-const PROVIDERS_PER_PAGE = 5;
+const PROVIDERS_PER_PAGE = 20;
 let currentPage = 1;
 let currentProviders = [];
 let currentProviderType = '';
@@ -144,6 +144,7 @@ function normalizeProviderCatalogPayload(payload = {}, providerType = '') {
         providerType,
         updatedAt: payload?.updatedAt || null,
         refreshIntervalMs: payload?.refreshIntervalMs ?? null,
+        modelMissingThreshold: payload?.modelMissingThreshold ?? null,
         filePath: payload?.filePath || '',
         entry: payload?.providers?.[providerType] || null,
         fetchError: null
@@ -198,6 +199,28 @@ function renderProviderCatalogModelPreview(models = []) {
             ${normalizedModels.map(model => `
                 <span class="provider-catalog-model-tag" title="${escapeHtml(model)}">${escapeHtml(model)}</span>
             `).join('')}
+        </div>
+    `;
+}
+
+function renderProviderCatalogChangeBlock(title, models = [], tone = 'neutral', emptyText = '') {
+    const normalizedModels = normalizeModelList(models).slice(0, 10);
+    if (normalizedModels.length === 0 && !emptyText) {
+        return '';
+    }
+
+    return `
+        <div class="provider-catalog-change-block tone-${escapeHtml(tone)}">
+            <div class="provider-catalog-change-title">${escapeHtml(title)}</div>
+            ${normalizedModels.length > 0 ? `
+                <div class="provider-catalog-models">
+                    ${normalizedModels.map(model => `
+                        <span class="provider-catalog-model-tag tone-${escapeHtml(tone)}" title="${escapeHtml(model)}">${escapeHtml(model)}</span>
+                    `).join('')}
+                </div>
+            ` : `
+                <div class="provider-catalog-change-empty">${escapeHtml(emptyText)}</div>
+            `}
         </div>
     `;
 }
@@ -808,10 +831,15 @@ function renderProviderCatalogPanel(providerType = currentProviderType) {
         : getCatalogEntryStatus(entry);
     const canRetry = canRetryProviderCatalog(entry);
     const modelCount = Array.isArray(entry?.models) ? entry.models.length : 0;
+    const activeModelCount = Number(entry?.activeModelCount || 0);
+    const pendingRemovalCount = Number(entry?.pendingRemovalCount || 0);
+    const removedModelCount = Number(entry?.removedModelCount || 0);
+    const missingThreshold = Number(entry?.missingThreshold ?? catalogState?.modelMissingThreshold ?? 0) || '-';
     const sampledCount = Array.isArray(entry?.sampledProviders) ? entry.sampledProviders.length : 0;
     const lastRefreshReason = entry?.lastRefreshReason || '-';
     const sourceLabel = formatCatalogSourceLabel(entry?.source);
     const lastRefreshAt = entry?.refreshedAt ? formatProviderDateTime(entry.refreshedAt) : '-';
+    const lastSuccessfulRefreshAt = entry?.lastSuccessfulRefreshedAt ? formatProviderDateTime(entry.lastSuccessfulRefreshedAt) : '-';
     const staleAt = entry?.staleAt ? formatProviderDateTime(entry.staleAt) : '-';
     const cacheUpdatedAt = catalogState?.updatedAt ? formatProviderDateTime(catalogState.updatedAt) : '-';
     const isBusy = providerCatalogLoading || providerCatalogRefreshing;
@@ -851,6 +879,22 @@ function renderProviderCatalogPanel(providerType = currentProviderType) {
                     <span class="value">${modelCount}</span>
                 </div>
                 <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.activeModelCount'))}</span>
+                    <span class="value">${activeModelCount}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.pendingRemovalCount'))}</span>
+                    <span class="value">${pendingRemovalCount}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.removedModelCount'))}</span>
+                    <span class="value">${removedModelCount}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.missingThreshold'))}</span>
+                    <span class="value">${missingThreshold}</span>
+                </div>
+                <div class="provider-catalog-metric">
                     <span class="label">${escapeHtml(t('modal.provider.catalog.sampledNodes'))}</span>
                     <span class="value">${sampledCount}</span>
                 </div>
@@ -865,6 +909,10 @@ function renderProviderCatalogPanel(providerType = currentProviderType) {
                 <div class="provider-catalog-metric">
                     <span class="label">${escapeHtml(t('modal.provider.catalog.lastRefresh'))}</span>
                     <span class="value">${escapeHtml(lastRefreshAt)}</span>
+                </div>
+                <div class="provider-catalog-metric">
+                    <span class="label">${escapeHtml(t('modal.provider.catalog.lastSuccessRefresh'))}</span>
+                    <span class="value">${escapeHtml(lastSuccessfulRefreshAt)}</span>
                 </div>
                 <div class="provider-catalog-metric">
                     <span class="label">${escapeHtml(t('modal.provider.catalog.nextExpire'))}</span>
@@ -889,6 +937,22 @@ function renderProviderCatalogPanel(providerType = currentProviderType) {
                 <div class="provider-catalog-warning">
                     <i class="fas fa-circle-exclamation"></i>
                     <span>${escapeHtml(t('modal.provider.catalog.error'))}: ${escapeHtml(entry.lastError)}</span>
+                </div>
+            ` : ''}
+            ${(entry?.addedModels?.length || entry?.removedModels?.length) ? `
+                <div class="provider-catalog-change-grid">
+                    ${renderProviderCatalogChangeBlock(
+                        t('modal.provider.catalog.addedModels'),
+                        entry?.addedModels || [],
+                        'added',
+                        t('modal.provider.catalog.noAddedModels')
+                    )}
+                    ${renderProviderCatalogChangeBlock(
+                        t('modal.provider.catalog.removedModels'),
+                        entry?.removedModels || [],
+                        'removed',
+                        t('modal.provider.catalog.noRemovedModels')
+                    )}
                 </div>
             ` : ''}
             ${renderProviderCatalogModelPreview(entry?.models || [])}
@@ -1906,7 +1970,7 @@ function renderProviderConfig(provider) {
         
         // 查找字段定义以获取 placeholder
         const fieldDef = fieldConfigs.find(f => f.id === fieldKey) || fieldConfigs.find(f => f.id.toUpperCase() === fieldKey.toUpperCase()) || {};
-        const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '例如: gpt-3.5-turbo' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : ''))));
+        const placeholder = fieldDef.placeholder || (fieldKey === 'customName' ? '节点自定义名称' : (fieldKey === 'checkModelName' ? '留空自动选择最新健康检查模型' : (fieldKey === 'concurrencyLimit' ? '最大并发, 默认0不限制' : (fieldKey === 'queueLimit' ? '最大队列, 默认0不限制' : ''))));
         
         // 如果是 customName 字段，使用普通文本输入框
         if (fieldKey === 'customName') {
@@ -2739,7 +2803,7 @@ function showAddProviderForm(providerType) {
             </div>
             <div class="form-group">
                 <label><span data-i18n="modal.provider.checkModelName">检查模型名称</span> <span class="optional-mark" data-i18n="config.optional">(选填)</span></label>
-                <input type="text" id="newCheckModelName" data-i18n="modal.provider.checkModelName" placeholder="例如: gpt-3.5-turbo">
+                <input type="text" id="newCheckModelName" data-i18n="modal.provider.checkModelName" placeholder="留空自动选择最新健康检查模型">
             </div>
             <div class="form-group">
                 <label data-i18n="modal.provider.healthCheckLabel">健康检查</label>

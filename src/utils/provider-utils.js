@@ -335,7 +335,8 @@ export function createProviderConfig(options) {
     const newProvider = {
         [credPathKey]: credPath,
         uuid: generateUUID(),
-        checkModelName: defaultCheckModel,
+        // Leave health-check model empty so runtime selection can follow the latest detected model.
+        checkModelName: '',
         checkHealth: defaultCheckHealth ?? false,
         isHealthy: true,
         isDisabled: false,

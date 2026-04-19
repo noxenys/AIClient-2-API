@@ -813,6 +813,43 @@
     gap: 8px;
 }
 
+.provider-catalog-change-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+}
+
+.provider-catalog-change-block {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid var(--neutral-200);
+    background: rgba(255, 255, 255, 0.78);
+}
+
+.provider-catalog-change-block.tone-added {
+    border-color: rgba(16, 185, 129, 0.18);
+    background: rgba(236, 253, 245, 0.92);
+}
+
+.provider-catalog-change-block.tone-removed {
+    border-color: rgba(239, 68, 68, 0.18);
+    background: rgba(254, 242, 242, 0.92);
+}
+
+.provider-catalog-change-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.provider-catalog-change-empty {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
 .provider-catalog-model-tag {
     display: inline-flex;
     align-items: center;
@@ -826,6 +863,18 @@
     max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.provider-catalog-model-tag.tone-added {
+    background: rgba(16, 185, 129, 0.08);
+    border-color: rgba(16, 185, 129, 0.18);
+    color: #047857;
+}
+
+.provider-catalog-model-tag.tone-removed {
+    background: rgba(239, 68, 68, 0.08);
+    border-color: rgba(239, 68, 68, 0.16);
+    color: #b91c1c;
 }
 
 .provider-catalog-empty {
@@ -2238,6 +2287,21 @@
     outline: none;
 }
 
+[data-theme="dark"] .provider-catalog-change-block {
+    background: rgba(17, 24, 39, 0.88);
+    border-color: var(--border-color);
+}
+
+[data-theme="dark"] .provider-catalog-change-block.tone-added {
+    background: rgba(6, 78, 59, 0.28);
+    border-color: rgba(16, 185, 129, 0.22);
+}
+
+[data-theme="dark"] .provider-catalog-change-block.tone-removed {
+    background: rgba(127, 29, 29, 0.28);
+    border-color: rgba(248, 113, 113, 0.2);
+}
+
 [data-theme="dark"] .provider-modal-header h3 {
     color: var(--text-primary) !important;
 }
@@ -2300,10 +2364,28 @@
     color: var(--text-secondary) !important;
 }
 
+[data-theme="dark"] .provider-catalog-model-tag.tone-added {
+    background: rgba(6, 78, 59, 0.36) !important;
+    border-color: rgba(52, 211, 153, 0.28) !important;
+    color: #a7f3d0 !important;
+}
+
+[data-theme="dark"] .provider-catalog-model-tag.tone-removed {
+    background: rgba(127, 29, 29, 0.34) !important;
+    border-color: rgba(252, 165, 165, 0.24) !important;
+    color: #fecaca !important;
+}
+
 [data-theme="dark"] .provider-catalog-empty {
     background: rgba(15, 23, 42, 0.68) !important;
     border-color: rgba(148, 163, 184, 0.14) !important;
     color: var(--text-secondary) !important;
+}
+
+[data-theme="dark"] .provider-catalog-warning {
+    background: rgba(127, 29, 29, 0.24) !important;
+    border-color: rgba(248, 113, 113, 0.24) !important;
+    color: #fecaca !important;
 }
 
 [data-theme="dark"] .provider-model-status-card {
@@ -2330,6 +2412,12 @@
     color: var(--text-secondary) !important;
 }
 
+[data-theme="dark"] .provider-model-status-warning {
+    background: rgba(127, 29, 29, 0.24) !important;
+    border-color: rgba(248, 113, 113, 0.24) !important;
+    color: #fecaca !important;
+}
+
 [data-theme="dark"] .provider-model-status-item {
     background: rgba(15, 23, 42, 0.76) !important;
     border-color: rgba(148, 163, 184, 0.14) !important;
@@ -2342,6 +2430,30 @@
 [data-theme="dark"] .provider-model-status-chip {
     background: rgba(30, 41, 59, 0.82) !important;
     border-color: rgba(148, 163, 184, 0.14) !important;
+    color: var(--text-secondary) !important;
+}
+
+[data-theme="dark"] .provider-model-status-badge.status-healthy {
+    background: rgba(6, 78, 59, 0.34) !important;
+    border-color: rgba(52, 211, 153, 0.28) !important;
+    color: #a7f3d0 !important;
+}
+
+[data-theme="dark"] .provider-model-status-badge.status-degraded {
+    background: rgba(120, 53, 15, 0.34) !important;
+    border-color: rgba(251, 191, 36, 0.26) !important;
+    color: #fde68a !important;
+}
+
+[data-theme="dark"] .provider-model-status-badge.status-failing {
+    background: rgba(127, 29, 29, 0.34) !important;
+    border-color: rgba(248, 113, 113, 0.24) !important;
+    color: #fecaca !important;
+}
+
+[data-theme="dark"] .provider-model-status-badge.status-unknown {
+    background: rgba(30, 41, 59, 0.82) !important;
+    border-color: rgba(148, 163, 184, 0.16) !important;
     color: var(--text-secondary) !important;
 }
 
@@ -2382,12 +2494,6 @@
 [data-theme="dark"] .supported-models-empty { color: var(--text-secondary); }
 [data-theme="dark"] .provider-model-picker-empty { background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary); }
 [data-theme="dark"] .provider-model-picker-search { background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary); }
-[data-theme="dark"] .provider-catalog-warning {
-    background: rgba(127, 29, 29, 0.24) !important;
-    border-color: rgba(248, 113, 113, 0.24) !important;
-    color: #fecaca !important;
-}
-
 [data-theme="dark"] .provider-model-picker-item { background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary); }
 [data-theme="dark"] .provider-model-picker-item:hover { background: var(--bg-tertiary); border-color: var(--primary-color); }
 [data-theme="dark"] .provider-model-picker-item span { color: var(--text-primary); }
@@ -2402,33 +2508,4 @@
 
 [data-theme="dark"] .highlight-note i {
     color: var(--warning-color);
-}
-[data-theme="dark"] .provider-model-status-warning {
-    background: rgba(127, 29, 29, 0.24) !important;
-    border-color: rgba(248, 113, 113, 0.24) !important;
-    color: #fecaca !important;
-}
-
-[data-theme="dark"] .provider-model-status-badge.status-healthy {
-    background: rgba(6, 78, 59, 0.34) !important;
-    border-color: rgba(52, 211, 153, 0.28) !important;
-    color: #a7f3d0 !important;
-}
-
-[data-theme="dark"] .provider-model-status-badge.status-degraded {
-    background: rgba(120, 53, 15, 0.34) !important;
-    border-color: rgba(251, 191, 36, 0.26) !important;
-    color: #fde68a !important;
-}
-
-[data-theme="dark"] .provider-model-status-badge.status-failing {
-    background: rgba(127, 29, 29, 0.34) !important;
-    border-color: rgba(248, 113, 113, 0.24) !important;
-    color: #fecaca !important;
-}
-
-[data-theme="dark"] .provider-model-status-badge.status-unknown {
-    background: rgba(30, 41, 59, 0.82) !important;
-    border-color: rgba(148, 163, 184, 0.16) !important;
-    color: var(--text-secondary) !important;
 }

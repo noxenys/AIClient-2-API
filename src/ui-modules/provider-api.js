@@ -6,6 +6,7 @@ import {
     getConfiguredSupportedModels,
     getProviderModels,
     normalizeModelIds,
+    usesDynamicHealthCheckModel,
     usesManagedModelList
 } from '../providers/provider-models.js';
 import {
@@ -186,10 +187,14 @@ function buildObservedProvider(providerType, provider, schedulerSnapshot = null)
     const recentHttpStatus = schedulerData?.recentHttpStatus ?? provider.recentHttpStatus ?? extractRecentHttpStatus(provider.lastStateReason || provider.lastErrorMessage || '');
     const isSelectable = schedulerData?.isSelectionCandidate ?? provider.isSelectable ?? (isProviderStateSelectable(runtimeState) && !provider.isDisabled && !provider.needsRefresh);
     const { activeRequests, waitingRequests } = getProviderStatusCounts(provider);
+    const normalizedCheckModelName = usesDynamicHealthCheckModel(providerType, provider.checkModelName)
+        ? ''
+        : provider.checkModelName;
 
     return {
         ...provider,
         providerType,
+        checkModelName: normalizedCheckModelName,
         state: runtimeState,
         isHealthy: runtimeState === 'healthy',
         isDisabled: runtimeState === 'disabled',
@@ -605,6 +610,7 @@ function getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, prov
             version: 1,
             updatedAt: null,
             refreshIntervalMs: null,
+            modelMissingThreshold: currentConfig?.PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD || 2,
             filePath: currentConfig?.PROVIDER_CATALOG_CACHE_FILE_PATH || 'configs/provider_catalog_cache.json',
             providers: {}
         },
@@ -847,7 +853,8 @@ function applyDetectedModelsPatch(providerType, provider, models = [], {
     );
     if (preferredCheckModel &&
         preferredCheckModel !== provider.checkModelName &&
-        (!provider.checkModelName || !normalizedModels.includes(provider.checkModelName))) {
+        !usesDynamicHealthCheckModel(providerType, provider.checkModelName) &&
+        !normalizedModels.includes(provider.checkModelName)) {
         provider.checkModelName = preferredCheckModel;
     }
 
@@ -901,7 +908,8 @@ async function runProviderHealthCheck(providerPoolManager, providerType, provide
         );
         if (checkModelName &&
             checkModelName !== providerConfig.checkModelName &&
-            (!providerConfig.checkModelName || !supportedModels.includes(providerConfig.checkModelName))) {
+            !usesDynamicHealthCheckModel(providerType, providerConfig.checkModelName) &&
+            !supportedModels.includes(providerConfig.checkModelName)) {
             providerConfig.checkModelName = checkModelName;
         }
         if (checkModelName) {
@@ -1361,7 +1369,9 @@ export async function handleBatchProviderAction(req, res, currentConfig, provide
         }
 
         if (action === 'refresh-models') {
-            const concurrency = clampConcurrency(body.concurrency, { fallback: 4 });
+            const concurrency = clampConcurrency(body.concurrency, {
+                fallback: providerType === 'grok-custom' ? 1 : 4
+            });
             const results = await mapWithConcurrency(targets, concurrency, async provider => {
                 try {
                     const { models, source } = await detectModelsForProviderNode(currentConfig, providerType, provider);
@@ -1570,6 +1580,7 @@ export async function handleGetModelCatalog(req, res, currentConfig, providerPoo
             version: 1,
             updatedAt: null,
             refreshIntervalMs: currentConfig?.PROVIDER_CATALOG_REFRESH_INTERVAL_MS || null,
+            modelMissingThreshold: currentConfig?.PROVIDER_CATALOG_MODEL_MISSING_THRESHOLD || 2,
             filePath: currentConfig?.PROVIDER_CATALOG_CACHE_FILE_PATH || 'configs/provider_catalog_cache.json',
             providers: {}
         };
