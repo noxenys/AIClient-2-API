@@ -229,7 +229,7 @@ const PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES = Object.freeze({
 });
 const LEGACY_AUTO_HEALTH_CHECK_MODELS = Object.freeze({
     'claude-kiro-oauth': ['claude-haiku-4-5'],
-    'openai-codex-oauth': ['gpt-5-codex-mini', 'gpt-5.2-codex'],
+    'openai-codex-oauth': ['gpt-5.4-mini', 'gpt-5.4'],
     'gemini-antigravity': ['gemini-2.5-computer-use-preview-10-2025'],
     'openai-iflow': ['gpt-4o']
 });
