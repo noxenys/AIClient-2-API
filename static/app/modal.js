@@ -1089,7 +1089,7 @@ async function fetchProviderModelStatusState(providerType, { silent = false } = 
     renderCurrentProviderPage();
 
     try {
-        const payload = await window.apiClient.get(`/api/model-status/${encodeURIComponent(providerType)}`);
+        const payload = await window.apiClient.get(`/model-status/${encodeURIComponent(providerType)}`);
         if (requestSeq !== providerModelStatusFetchSequence) {
             return null;
         }
