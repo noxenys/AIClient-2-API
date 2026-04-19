@@ -1,0 +1,31 @@
+<link rel="stylesheet" href="components/section-model-status.css">
+<section id="model-status" class="section" aria-labelledby="model-status-title">
+    <div class="section-header">
+        <h2 id="model-status-title" data-i18n="modelStatus.page.title">模型状态监控</h2>
+        <button id="refreshModelStatusBtn" class="btn btn-primary">
+            <i class="fas fa-arrows-rotate"></i> <span data-i18n="modelStatus.page.refresh">刷新监控</span>
+        </button>
+    </div>
+
+    <div class="pool-description">
+        <div class="highlight-note">
+            <i class="fas fa-wave-square"></i>
+            <span data-i18n="modelStatus.page.description">按提供商维度查看最近 24 小时模型运行状态，不再混在账号池管理弹窗里。</span>
+        </div>
+    </div>
+
+    <div class="model-status-toolbar">
+        <div class="search-input-wrapper">
+            <i class="fas fa-search"></i>
+            <input
+                type="text"
+                id="modelStatusProviderSearchInput"
+                data-i18n-placeholder="modelStatus.page.providerSearchPlaceholder"
+                placeholder="搜索提供商名称、ID 或分组..."
+            >
+        </div>
+    </div>
+
+    <div id="modelStatusProviderList" class="model-status-provider-list"></div>
+    <div id="modelStatusContent" class="model-status-content"></div>
+</section>

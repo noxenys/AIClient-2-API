@@ -92,6 +92,12 @@ import {
 } from './tutorial-manager.js';
 
 import {
+    initModelStatusManager,
+    loadModelStatusDashboard,
+    refreshModelStatusDashboard
+} from './model-status-manager.js';
+
+import {
     CustomModelsManager
 } from './custom-models-manager.js';
 import { createSectionInitializer } from './performance-utils.js';
@@ -107,6 +113,10 @@ const sectionInitializers = createSectionInitializer({
     },
     'upload-config': async () => {
         initUploadConfigManager();
+    },
+    'model-status': async () => {
+        initModelStatusManager();
+        await loadModelStatusDashboard();
     },
     usage: async () => {
         initUsageManager();
@@ -139,6 +149,8 @@ function loadInitialData() {
             window.customModelsManager.load();
         } else if (activeSectionId === 'upload-config') {
             loadConfigList();
+        } else if (activeSectionId === 'model-status') {
+            loadModelStatusDashboard();
         } else if (activeSectionId === 'usage') {
             loadUsage();
         } else if (activeSectionId === 'plugins') {
@@ -192,6 +204,9 @@ function initApp() {
         const activeSectionId = getActiveSectionId();
         if (activeSectionId === 'dashboard' || activeSectionId === 'providers') {
             loadProviders();
+        }
+        if (activeSectionId === 'model-status') {
+            refreshModelStatusDashboard({ silent: true });
         }
 
         if (providerStats.activeProviders > 0) {

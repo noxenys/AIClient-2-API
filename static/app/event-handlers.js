@@ -448,16 +448,20 @@ async function proceedWithAuth(providerType, targetInputId, extraOptions = {}) {
 function handleProviderPoolsConfigChange(event) {
     const filePath = event.target.value.trim();
     const providersMenuItem = document.querySelector('.nav-item[data-section="providers"]');
+    const modelStatusMenuItem = document.querySelector('.nav-item[data-section="model-status"]');
+    const managedMenuItems = [providersMenuItem, modelStatusMenuItem].filter(Boolean);
     
     if (filePath) {
-        // 显示提供商池菜单
-        if (providersMenuItem) providersMenuItem.style.display = 'flex';
+        managedMenuItems.forEach(item => {
+            item.style.display = 'flex';
+        });
     } else {
-        // 隐藏提供商池菜单
-        if (providersMenuItem) providersMenuItem.style.display = 'none';
+        managedMenuItems.forEach(item => {
+            item.style.display = 'none';
+        });
         
-        // 如果当前在提供商池页面，切换到仪表盘
-        if (providersMenuItem && providersMenuItem.classList.contains('active')) {
+        const shouldSwitchToDashboard = managedMenuItems.some(item => item.classList.contains('active'));
+        if (shouldSwitchToDashboard) {
             const dashboardItem = document.querySelector('.nav-item[data-section="dashboard"]');
             const dashboardSection = document.getElementById('dashboard');
             
