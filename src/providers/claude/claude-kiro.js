@@ -49,12 +49,14 @@ const KIRO_CONSTANTS = {
 
 // Per-model context window sizes for accurate token estimation
 const MODEL_CONTEXT_TOKENS = {
+    "claude-opus-4-7": 1000000,
     "claude-opus-4-6": 1000000,
     "claude-opus-4-5": 1000000,
     "claude-opus-4-5-20251101": 1000000,
     "claude-sonnet-4-6": 200000,
     "claude-sonnet-4-5": 200000,
     "claude-sonnet-4-5-20250929": 200000,
+    "claude-sonnet-4-20250514": 200000,
     "claude-haiku-4-5": 200000,
     "claude-haiku-4-5-20251001": 200000,
 };
@@ -98,12 +100,15 @@ const KIRO_MODELS = getProviderModels(MODEL_PROVIDER.KIRO_API);
 // 完整的模型映射表
 const FULL_MODEL_MAPPING = {
     "claude-haiku-4-5":"claude-haiku-4.5",
+    "claude-haiku-4-5-20251001":"claude-haiku-4.5",
+    "claude-opus-4-7":"claude-opus-4.7",
     "claude-opus-4-6":"claude-opus-4.6",
     "claude-sonnet-4-6":"claude-sonnet-4.6",
     "claude-opus-4-5":"claude-opus-4.5",
     "claude-opus-4-5-20251101":"claude-opus-4.5",
     "claude-sonnet-4-5": "claude-sonnet-4.5",
-    "claude-sonnet-4-5-20250929": "claude-sonnet-4.5"
+    "claude-sonnet-4-5-20250929": "claude-sonnet-4.5",
+    "claude-sonnet-4-20250514": "claude-sonnet-4.0"
 };
 
 // 只保留 KIRO_MODELS 中存在的模型映射

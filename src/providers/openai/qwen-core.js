@@ -20,10 +20,34 @@ const QWEN_DIR = '.qwen';
 const QWEN_CREDENTIAL_FILENAME = 'oauth_creds.json';
 // 从 provider-models.js 获取支持的模型列表
 const QWEN_MODELS = getProviderModels(MODEL_PROVIDER.QWEN_API);
-const QWEN_MODEL_LIST = QWEN_MODELS.map(id => ({
-    id: id,
-    name: id.split('-').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ')
-}));
+
+function formatQwenModelName(modelId = '') {
+    return String(modelId)
+        .split('-')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+}
+
+function buildQwenModelList(modelIds = []) {
+    return normalizeModelIds(modelIds).map(id => ({
+        id,
+        name: formatQwenModelName(id)
+    }));
+}
+
+function extractQwenModelIdsFromPayload(payload = {}) {
+    if (Array.isArray(payload?.data)) {
+        return normalizeModelIds(payload.data.map(model => model?.id || model?.name || model?.model));
+    }
+
+    if (Array.isArray(payload?.models)) {
+        return normalizeModelIds(payload.models.map(model => model?.id || model?.name || model?.model || model));
+    }
+
+    return [];
+}
+
+const QWEN_MODEL_LIST = buildQwenModelList(QWEN_MODELS);
 
 function getAllowedQwenModels(config = {}) {
     const configuredModels = normalizeModelIds(Array.isArray(config?.supportedModels) ? config.supportedModels : []);
@@ -863,7 +887,65 @@ export class QwenApiService {
     }
 
     async listModels() {
-        // Return the predefined models for Qwen
+        if (!this.isInitialized) {
+            await this.initialize();
+        }
+
+        const cachedCredentials = this.qwenClient.getCredentials();
+        if (!cachedCredentials?.access_token && !cachedCredentials?.refresh_token) {
+            logger.debug('[QwenApiService] No cached OAuth credentials available during model discovery, using builtin seeds');
+            return {
+                data: QWEN_MODEL_LIST
+            };
+        }
+
+        const version = "0.14.2";
+        const userAgent = `QwenCode/${version} (${process.platform}; ${process.arch})`;
+
+        try {
+            const { token, endpoint: qwenBaseUrl } = await this.getValidToken();
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+                'User-Agent': userAgent,
+                'X-DashScope-UserAgent': userAgent,
+                'X-Stainless-Runtime-Version': 'v22.17.0',
+                'X-Stainless-Lang': 'js',
+                'X-Stainless-Arch': process.arch === 'x64' ? 'x86_64' : process.arch,
+                'X-Stainless-Package-Version': '5.11.0',
+                'X-DashScope-CacheControl': 'enable',
+                'X-DashScope-AuthType': 'qwen-oauth',
+                'X-Stainless-Runtime': 'node',
+                Accept: 'application/json',
+            };
+
+            const axiosConfig = {
+                baseURL: qwenBaseUrl,
+                headers,
+                proxy: this.useSystemProxy ? undefined : false,
+            };
+            configureAxiosProxy(axiosConfig, this.config, this.config.MODEL_PROVIDER || MODEL_PROVIDER.QWEN_API);
+
+            const instance = axios.create(axiosConfig);
+            const requestConfig = {
+                method: 'get',
+                url: '/models'
+            };
+            this._applySidecar(requestConfig);
+
+            const response = await instance.request(requestConfig);
+            const liveModelIds = extractQwenModelIdsFromPayload(response.data);
+            if (liveModelIds.length > 0) {
+                return {
+                    data: buildQwenModelList(liveModelIds)
+                };
+            }
+
+            logger.warn('[QwenApiService] Live model list returned no usable model ids, falling back to builtin seeds');
+        } catch (error) {
+            logger.warn(`[QwenApiService] Failed to fetch live model list, falling back to builtin seeds: ${error.response?.status || error.message}`);
+        }
+
         return {
             data: QWEN_MODEL_LIST
         };

@@ -66,6 +66,8 @@ export const PROVIDER_MODELS = {
     'claude-custom': [],
     'claude-kiro-oauth': [
         'claude-haiku-4-5',
+        'claude-haiku-4-5-20251001',
+        'claude-opus-4-7',
         'claude-opus-4-6',
         'claude-sonnet-4-6',
         'claude-opus-4-5',
@@ -73,7 +75,6 @@ export const PROVIDER_MODELS = {
         'claude-sonnet-4-5',
         'claude-sonnet-4-5-20250929',
         'claude-sonnet-4-20250514',
-        'claude-3-7-sonnet-20250219'
     ],
     'openai-custom': [],
     'openaiResponses-custom': [],
@@ -112,15 +113,7 @@ export const PROVIDER_MODELS = {
         'minimax-m2.5',
     ],
     'openai-codex-oauth': [
-        'gpt-5',
-        'gpt-5-codex',
-        'gpt-5-codex-mini',
-        'gpt-5.1',
-        'gpt-5.1-codex',
-        'gpt-5.1-codex-mini',
-        'gpt-5.1-codex-max',
         'gpt-5.2',
-        'gpt-5.2-codex',
         'gpt-5.3-codex',
         'gpt-5.3-codex-spark',
         'gpt-5.4',
@@ -143,6 +136,13 @@ export const PROVIDER_MODELS = {
 };
 
 export const MANAGED_MODEL_LIST_PROVIDERS = [
+    'openai-custom',
+    'openaiResponses-custom',
+    'claude-custom',
+    'openai-codex-oauth',
+    'grok-custom'
+];
+
 export const DEFAULT_PROVIDER_HEALTH_CHECK_MODELS = Object.freeze({
     'gemini-cli-oauth': 'gemini-2.5-flash',
     'gemini-antigravity': 'gemini-2.5-flash',
@@ -151,7 +151,7 @@ export const DEFAULT_PROVIDER_HEALTH_CHECK_MODELS = Object.freeze({
     'claude-kiro-oauth': 'claude-haiku-4-5',
     'openai-qwen-oauth': 'qwen3-coder-flash',
     'openai-iflow': 'qwen3-coder-plus',
-    'openai-codex-oauth': 'gpt-5-codex-mini',
+    'openai-codex-oauth': 'gpt-5.4-mini',
     'openaiResponses-custom': 'gpt-4o-mini',
     'forward-api': 'gpt-4o-mini',
     'grok-custom': 'grok-4.20'
@@ -226,13 +226,6 @@ export function getPreferredHealthCheckModel(providerType, models = [], currentC
 
     return normalizedModels[0] || normalizedCurrent || defaultModel || '';
 }
-
-    'openai-custom',
-    'openaiResponses-custom',
-    'claude-custom',
-    'openai-codex-oauth',
-    'grok-custom'
-];
 
 export function getManagedModelListProviderType(providerType) {
     return MANAGED_MODEL_LIST_PROVIDERS.find(baseType =>

@@ -8,93 +8,49 @@ import {
     normalizeModelIds
 } from './provider-models.js';
 
+const BASE_CODEX_PLAN_MODELS = [
+    'gpt-5.2',
+    'gpt-5.3-codex',
+    'gpt-5.4',
+    'gpt-5.4-mini'
+];
+const CODEX_PRO_PLAN_MODELS = [
+    ...BASE_CODEX_PLAN_MODELS,
+    'gpt-5.3-codex-spark'
+];
 const CODEX_PLAN_MODELS = {
-    free: [
-        'gpt-5',
-        'gpt-5-codex',
-        'gpt-5-codex-mini',
-        'gpt-5.1',
-        'gpt-5.1-codex',
-        'gpt-5.1-codex-mini',
-        'gpt-5.1-codex-max',
-        'gpt-5.2',
-        'gpt-5.2-codex',
-        'gpt-5.3-codex',
-        'gpt-5.4',
-        'gpt-5.4-mini'
-    ],
-    plus: [
-        'gpt-5',
-        'gpt-5-codex',
-        'gpt-5-codex-mini',
-        'gpt-5.1',
-        'gpt-5.1-codex',
-        'gpt-5.1-codex-mini',
-        'gpt-5.1-codex-max',
-        'gpt-5.2',
-        'gpt-5.2-codex',
-        'gpt-5.3-codex',
-        'gpt-5.3-codex-spark',
-        'gpt-5.4',
-        'gpt-5.4-mini'
-    ],
-    pro: [
-        'gpt-5',
-        'gpt-5-codex',
-        'gpt-5-codex-mini',
-        'gpt-5.1',
-        'gpt-5.1-codex',
-        'gpt-5.1-codex-mini',
-        'gpt-5.1-codex-max',
-        'gpt-5.2',
-        'gpt-5.2-codex',
-        'gpt-5.3-codex',
-        'gpt-5.3-codex-spark',
-        'gpt-5.4',
-        'gpt-5.4-mini'
-    ],
-    team: [
-        'gpt-5',
-        'gpt-5-codex',
-        'gpt-5-codex-mini',
-        'gpt-5.1',
-        'gpt-5.1-codex',
-        'gpt-5.1-codex-mini',
-        'gpt-5.1-codex-max',
-        'gpt-5.2',
-        'gpt-5.2-codex',
-        'gpt-5.3-codex',
-        'gpt-5.4',
-        'gpt-5.4-mini'
-    ],
-    business: [
-        'gpt-5',
-        'gpt-5-codex',
-        'gpt-5-codex-mini',
-        'gpt-5.1',
-        'gpt-5.1-codex',
-        'gpt-5.1-codex-mini',
-        'gpt-5.1-codex-max',
-        'gpt-5.2',
-        'gpt-5.2-codex',
-        'gpt-5.3-codex',
-        'gpt-5.4',
-        'gpt-5.4-mini'
-    ],
-    go: [
-        'gpt-5',
-        'gpt-5-codex',
-        'gpt-5-codex-mini',
-        'gpt-5.1',
-        'gpt-5.1-codex',
-        'gpt-5.1-codex-mini',
-        'gpt-5.1-codex-max',
-        'gpt-5.2',
-        'gpt-5.2-codex',
-        'gpt-5.3-codex',
-        'gpt-5.4',
-        'gpt-5.4-mini'
-    ]
+    free: BASE_CODEX_PLAN_MODELS,
+    plus: BASE_CODEX_PLAN_MODELS,
+    pro: CODEX_PRO_PLAN_MODELS,
+    team: BASE_CODEX_PLAN_MODELS,
+    business: BASE_CODEX_PLAN_MODELS,
+    go: BASE_CODEX_PLAN_MODELS
+};
+const MODEL_SOURCE_CACHE_TTL_MS = 30 * 60 * 1000;
+const MODEL_SOURCE_ERROR_TTL_MS = 5 * 60 * 1000;
+const MODEL_SOURCE_FETCH_TIMEOUT_MS = 15000;
+const MODEL_SOURCE_FETCH_HEADERS = {
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+    accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'accept-language': 'en-US,en;q=0.9'
+};
+const MODEL_SOURCE_CACHE = new Map();
+const CODEX_OFFICIAL_MODEL_DOC_URLS = [
+    'https://developers.openai.com/codex/models',
+    'https://developers.openai.com/api/docs/models/all/'
+];
+const CODEX_OFFICIAL_MODEL_PATTERN = /\bgpt-5(?:\.\d+)?(?:-mini|-codex(?:-spark)?)?\b/g;
+const KIRO_OFFICIAL_MODELS_URL = 'https://kiro.dev/docs/models/';
+const KIRO_OFFICIAL_MODEL_PATTERN = /\bClaude\s+(Opus|Sonnet|Haiku)\s+(\d(?:\.\d)?)\b/gi;
+const KIRO_DOC_MODEL_ID_MAP = {
+    'Opus:4.7': ['claude-opus-4-7'],
+    'Opus:4.6': ['claude-opus-4-6'],
+    'Opus:4.5': ['claude-opus-4-5', 'claude-opus-4-5-20251101'],
+    'Sonnet:4.6': ['claude-sonnet-4-6'],
+    'Sonnet:4.5': ['claude-sonnet-4-5', 'claude-sonnet-4-5-20250929'],
+    'Sonnet:4.0': ['claude-sonnet-4-20250514'],
+    'Sonnet:4': ['claude-sonnet-4-20250514'],
+    'Haiku:4.5': ['claude-haiku-4-5', 'claude-haiku-4-5-20251001']
 };
 
 const GROK_MODE_TO_MODEL_MAP = {
@@ -152,6 +108,47 @@ export function getCodexModelsByPlanType(planType = '') {
     return normalizeModelIds(CODEX_PLAN_MODELS[normalizedPlan] || CODEX_PLAN_MODELS.pro);
 }
 
+function getCachedModelSource(cacheKey) {
+    const cachedEntry = MODEL_SOURCE_CACHE.get(cacheKey);
+    if (!cachedEntry) {
+        return null;
+    }
+
+    if (cachedEntry.expiresAt <= Date.now()) {
+        MODEL_SOURCE_CACHE.delete(cacheKey);
+        return null;
+    }
+
+    return cachedEntry.models;
+}
+
+function setCachedModelSource(cacheKey, models = [], ttlMs = MODEL_SOURCE_CACHE_TTL_MS) {
+    MODEL_SOURCE_CACHE.set(cacheKey, {
+        models: normalizeModelIds(models),
+        expiresAt: Date.now() + ttlMs
+    });
+}
+
+async function fetchText(url) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), MODEL_SOURCE_FETCH_TIMEOUT_MS);
+
+    try {
+        const response = await fetch(url, {
+            headers: MODEL_SOURCE_FETCH_HEADERS,
+            signal: controller.signal
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+        }
+
+        return await response.text();
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
 async function readJsonFile(filePath) {
     if (!filePath) {
         return null;
@@ -168,6 +165,22 @@ async function readJsonFile(filePath) {
     } catch {
         return null;
     }
+}
+
+function extractModelIdsFromListPayload(payload = {}) {
+    if (Array.isArray(payload)) {
+        return normalizeModelIds(payload.map(item => item?.id || item?.name || item?.model || item));
+    }
+
+    if (Array.isArray(payload?.data)) {
+        return normalizeModelIds(payload.data.map(item => item?.id || item?.name || item?.model));
+    }
+
+    if (Array.isArray(payload?.models)) {
+        return normalizeModelIds(payload.models.map(item => item?.id || item?.name || item?.model || item));
+    }
+
+    return [];
 }
 
 async function inferCodexModels(providerConfig = {}) {
@@ -197,6 +210,33 @@ async function inferCodexModels(providerConfig = {}) {
         return getCodexModelsByPlanType(claimPlanType);
     }
 
+    return [];
+}
+
+function extractCodexModelsFromOfficialText(text = '') {
+    return normalizeModelIds(text.match(CODEX_OFFICIAL_MODEL_PATTERN) || []);
+}
+
+async function detectCodexModelsFromOfficialDocs() {
+    const cachedModels = getCachedModelSource('codex:official-docs');
+    if (cachedModels) {
+        return cachedModels;
+    }
+
+    for (const url of CODEX_OFFICIAL_MODEL_DOC_URLS) {
+        try {
+            const text = await fetchText(url);
+            const models = extractCodexModelsFromOfficialText(text);
+            if (models.length > 0) {
+                setCachedModelSource('codex:official-docs', models);
+                return models;
+            }
+        } catch {
+            // Fallback to plan inference or builtin seeds below.
+        }
+    }
+
+    setCachedModelSource('codex:official-docs', [], MODEL_SOURCE_ERROR_TTL_MS);
     return [];
 }
 
@@ -297,12 +337,92 @@ async function detectGrokModels(providerConfig = {}) {
     }
 }
 
+function extractKiroModelsFromOfficialText(text = '') {
+    const models = [];
+
+    for (const match of text.matchAll(KIRO_OFFICIAL_MODEL_PATTERN)) {
+        const family = match[1].charAt(0).toUpperCase() + match[1].slice(1).toLowerCase();
+        const version = match[2];
+        models.push(...(KIRO_DOC_MODEL_ID_MAP[`${family}:${version}`] || []));
+    }
+
+    return normalizeModelIds(models);
+}
+
+async function detectKiroModelsFromOfficialDocs() {
+    const cachedModels = getCachedModelSource('kiro:official-docs');
+    if (cachedModels) {
+        return cachedModels;
+    }
+
+    try {
+        const text = await fetchText(KIRO_OFFICIAL_MODELS_URL);
+        const models = extractKiroModelsFromOfficialText(text);
+        if (models.length > 0) {
+            setCachedModelSource('kiro:official-docs', models);
+            return models;
+        }
+    } catch {
+        // Fallback to builtin seeds below.
+    }
+
+    setCachedModelSource('kiro:official-docs', [], MODEL_SOURCE_ERROR_TTL_MS);
+    return [];
+}
+
+async function detectQwenModels(providerConfig = {}) {
+    try {
+        const { QwenApiService } = await import('./openai/qwen-core.js');
+        const service = new QwenApiService({
+            ...providerConfig,
+            MODEL_PROVIDER: 'openai-qwen-oauth'
+        });
+        const response = await service.listModels();
+        return extractModelIdsFromListPayload(response);
+    } catch {
+        return [];
+    }
+}
+
 export async function detectAvailableModelsForProvider(providerType, tempConfig = {}, options = {}) {
     if (providerType === 'openai-codex-oauth') {
+        const officialCodexModels = await detectCodexModelsFromOfficialDocs();
+        if (officialCodexModels.length > 0) {
+            const inferredCodexModels = await inferCodexModels(tempConfig);
+            if (inferredCodexModels.length > 0) {
+                const planFilteredModels = officialCodexModels.filter(model => inferredCodexModels.includes(model));
+                if (planFilteredModels.length > 0) {
+                    return planFilteredModels;
+                }
+            }
+
+            return officialCodexModels;
+        }
+
         const codexModels = await inferCodexModels(tempConfig);
         if (codexModels.length > 0) {
             return codexModels;
         }
+
+        return normalizeModelIds(getProviderModels(providerType));
+    }
+
+    if (providerType === 'openai-qwen-oauth') {
+        const qwenModels = await detectQwenModels(tempConfig);
+        if (qwenModels.length > 0) {
+            return qwenModels;
+        }
+
+        return normalizeModelIds(getProviderModels(providerType));
+    }
+
+    if (providerType === 'claude-kiro-oauth') {
+        const kiroModels = await detectKiroModelsFromOfficialDocs();
+        if (kiroModels.length > 0) {
+            return kiroModels;
+        }
+
+        return normalizeModelIds(getProviderModels(providerType));
     }
 
     if (providerType === 'grok-custom') {
@@ -350,21 +470,6 @@ export async function detectAvailableModelsForProvider(providerType, tempConfig 
 }
 
 export async function inferSupportedModelsFromProviderConfig(providerType, providerConfig = {}) {
-    if (providerType === 'openai-codex-oauth') {
-        const codexModels = await inferCodexModels(providerConfig);
-        if (codexModels.length > 0) {
-            return codexModels;
-        }
-    }
-
-    if (providerType === 'grok-custom') {
-        const grokModels = await detectGrokModels(providerConfig);
-        if (grokModels.length > 0) {
-            return grokModels;
-        }
-        return normalizeModelIds(getProviderModels(providerType));
-    }
-
     try {
         return await detectAvailableModelsForProvider(providerType, {
             ...providerConfig,

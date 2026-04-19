@@ -52,7 +52,7 @@ export const PROVIDER_MAPPINGS = [
         patterns: ['configs/antigravity/', '/antigravity/'],
         providerType: 'gemini-antigravity',
         credPathKey: 'ANTIGRAVITY_OAUTH_CREDS_FILE_PATH',
-        defaultCheckModel: 'gemini-2.5-computer-use-preview-10-2025',
+        defaultCheckModel: 'gemini-2.5-flash',
         displayName: 'Gemini Antigravity',
         needsProjectId: true,
         urlKeys: ['ANTIGRAVITY_BASE_URL_DAILY', 'ANTIGRAVITY_BASE_URL_AUTOPUSH']
@@ -63,7 +63,7 @@ export const PROVIDER_MAPPINGS = [
         patterns: ['configs/iflow/', '/iflow/'],
         providerType: 'openai-iflow',
         credPathKey: 'IFLOW_TOKEN_FILE_PATH',
-        defaultCheckModel: 'gpt-4o',
+        defaultCheckModel: 'qwen3-coder-plus',
         displayName: 'iFlow API',
         needsProjectId: false,
         urlKeys: ['IFLOW_BASE_URL']
@@ -74,7 +74,7 @@ export const PROVIDER_MAPPINGS = [
         patterns: ['configs/codex/', '/codex/'],
         providerType: 'openai-codex-oauth',
         credPathKey: 'CODEX_OAUTH_CREDS_FILE_PATH',
-        defaultCheckModel: 'gpt-5.2-codex',
+        defaultCheckModel: 'gpt-5.4-mini',
         displayName: 'OpenAI Codex OAuth',
         needsProjectId: false,
         urlKeys: ['CODEX_BASE_URL']
