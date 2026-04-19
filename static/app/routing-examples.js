@@ -385,7 +385,7 @@ async function copyCurlExample(provider, options = {}) {
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
-    "model": "grok-3",
+    "model": "${model}",
     "messages": [{"role": "user", "content": "${message}"}],
     "stream": true
   }'`;
@@ -394,7 +394,7 @@ async function copyCurlExample(provider, options = {}) {
   -H "Content-Type: application/json" \\
   -H "X-API-Key: YOUR_API_KEY" \\
   -d '{
-    "model": "grok-3",
+    "model": "${model}",
     "max_tokens": 1000,
     "messages": [{"role": "user", "content": "${message}"}]
   }'`;
@@ -445,12 +445,12 @@ function renderRoutingExamples(providerConfigs) {
         'gemini-antigravity': 'gemini-3-flash-preview',
         'claude-custom': 'claude-sonnet-4-6',
         'claude-kiro-oauth': 'claude-sonnet-4-6',
-        'openai-custom': 'gpt-4o',
+        'openai-custom': 'gpt-4o-mini',
         'openai-qwen-oauth': 'qwen3-coder-plus',
         'openai-iflow': 'qwen3-max',
-        'openai-codex-oauth': 'gpt-5',
-        'grok-custom': 'grok-3',
-        'openaiResponses-custom': 'gpt-4o'
+        'openai-codex-oauth': 'gpt-5.4',
+        'grok-custom': 'grok-4.20',
+        'openaiResponses-custom': 'gpt-4o-mini'
     };
 
     providerConfigs.forEach(config => {

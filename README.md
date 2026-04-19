@@ -6,77 +6,24 @@
 
 **A powerful proxy that can unify the requests of various client-only large model APIs (Gemini CLI, Antigravity, Codex, Grok, Kiro ...), simulate requests, and encapsulate them into a local OpenAI-compatible interface.**
 
-<a href="https://trendshift.io/repositories/15832" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15832" alt="justlovemaki%2FAIClient-2-API | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</div>
 </div>
 
 <div align="center">
 
-<a href="https://deepwiki.com/justlovemaki/AIClient-2-API"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"  style="width: 134px; height: 23px;margin-bottom: 3px;"></a>
-
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Node.js](https://img.shields.io/badge/Node.js-≥20.0.0-green.svg)](https://nodejs.org/)
-[![Docker](https://img.shields.io/badge/docker-≥20.0.0-blue.svg)](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
-[![GitHub stars](https://img.shields.io/github/stars/justlovemaki/AIClient-2-API.svg?style=flat&label=Star)](https://github.com/justlovemaki/AIClient-2-API/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/justlovemaki/AIClient-2-API.svg)](https://github.com/justlovemaki/AIClient-2-API/issues)
+[![GitHub stars](https://img.shields.io/github/stars/noxenys/AIClient-2-API.svg?style=flat&label=Star)](https://github.com/noxenys/AIClient-2-API/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/noxenys/AIClient-2-API.svg)](https://github.com/noxenys/AIClient-2-API/issues)
 
-[**🔧 OpenClaw Config**](./docs/OPENCLAW_CONFIG_GUIDE.md) | [中文](./README-ZH.md) | [**👉 English**](./README.md) | [日本語](./README-JA.md) | [**📚 Documentation**](https://aiproxy.justlikemaki.vip/en/)
+[**🔧 OpenClaw Config**](./docs/OPENCLAW_CONFIG_GUIDE.md) | [中文](./README-ZH.md) | [**👉 English**](./README.md) | [日本語](./README-JA.md) | [**📚 Documentation**](./docs/)
 
 </div>
 
 ## 💎 Sponsors
 
-<table width="100%">
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://www.packyapi.com/register?aff=AIClient2API">
-        <img src="static/packycode.png" alt="PackyCode Sponsor" width="180">
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      PackyCode is a reliable and efficient API relay service provider, offering relay services for Claude Code, Codex, Gemini, and more. PackyCode provides special discounts for our software users: <a href="https://www.packyapi.com/register?aff=AIClient2API">register using this link</a> and enter the <strong>AIClient2API</strong> promo code during recharge to get <strong>10% off</strong>.
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://www.aicodemirror.com/register?invitecode=5BUE62">
-        <img src="static/aicodemirror.jpg" alt="AICodeMirror Sponsor" width="180">
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      Thanks to AICodeMirror for sponsoring this project! AICodeMirror provides official high-stability relay services for Claude Code / Codex / Gemini CLI, with enterprise-grade concurrency, fast invoicing, and 24/7 dedicated technical support. Claude Code / Codex / Gemini official channels at 38% / 2% / 9% of original price, with extra discounts on top-ups! AICodeMirror offers special benefits for AIClient-2-API users: <a href="https://www.aicodemirror.com/register?invitecode=5BUE62">register via this link</a> to enjoy <strong>20% off</strong> your first top-up, and enterprise customers can get up to 25% off!
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://www.lingtrue.com/register?aff=MP34">
-        <img src="static/lingtrueapi.png" alt="LingtrueAPI Sponsor" width="180">
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      Thanks to LingtrueAPI for its sponsorship of this project! LingtrueAPI is a global large-model API intermediary service platform that offers API calling services for various models such as Claude opus 4.6, GPT 5.4, and Gemini 3.1 pro. It is committed to enabling users to connect to global AI capabilities at low cost and with high stability, maximizing production efficiency. LingtrueAPI provides special discounts for users of this software: <a href="https://www.lingtrue.com/register?aff=MP34">register using this link</a> and enter the <strong>LingtrueAPI</strong> promo code when making the first recharge to enjoy a <strong>10% discount</strong>.
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://poixe.com/i/ebmvga">
-        <img src="static/poixeai.png" alt="Poixe AI Sponsor" width="180">
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      Poixe AI provides reliable LLM API services. You can leverage the platform's API endpoints to seamlessly build AI-powered products. Additionally, you can become a vendor by providing AI API resources to the platform and earn revenue. <a href="https://poixe.com/i/ebmvga">Register through the exclusive AIClient-2-API referral link</a> and receive a bonus of <strong>$5 USD</strong> on your first top-up.
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <img src="static/wechat.png" alt="Sponsor Contact" width="150">
-    </td>
-    <td width="75%" align="left" valign="middle">
-      <strong>Become a Sponsor</strong><br>
-      If you would like to sponsor this project, please scan the WeChat QR code on the left (Please state your intent: <strong>Sponsorship</strong>).
-    </td>
-  </tr>
-</table>
+> This repository does not ship with any default purchase links, referral links, community links, or QR codes.
+>
+> If you want to display them, replace this section with your own information and assets.
 
 ---
 
@@ -104,7 +51,7 @@
 > > - **2026.01.03** - Added theme switching functionality and optimized provider pool initialization, removed the fallback strategy of using provider default configuration
 > - **2025.12.30** - Added main process management and automatic update functionality
 > - **2025.12.25** - Unified configuration management: All configs centralized to `configs/` directory. Docker users need to update mount path to `-v "local_path:/app/configs"`
-> - **2025.12.11** - Automatically built Docker images are now available on Docker Hub: [justlikemaki/aiclient-2-api](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
+> - **2025.12.11** - Added Docker deployment examples and local image build workflow
 > - **2025.11.30** - Added Antigravity protocol support, enabling access to Gemini 3 Pro, Claude Sonnet 4.5, and other models via Google internal interfaces
 > - **2025.11.11** - Added Web UI management console, supporting real-time configuration management and health status monitoring
 > - **2025.11.06** - Added support for Gemini 3 Preview, enhanced model compatibility and performance optimization
@@ -150,7 +97,7 @@
 
 - [💡 Core Advantages](#-core-advantages)
 - [🚀 Quick Start](#-quick-start)
-  - [🐳 Docker Deployment](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
+  - [🐳 Docker Deployment](./docker)
   - [📋 Core Features](#-core-features)
 - [🔐 Authorization Configuration Guide](#-authorization-configuration-guide)
 - [📁 Authorization File Storage Paths](#-authorization-file-storage-paths)
@@ -171,7 +118,7 @@ The most recommended way to use AIClient-2-API is to start it through an automat
 #### 🐳 Docker Quick Start (Recommended)
 
 ```bash
-docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19876-19880 --restart=always -v "your_path:/app/configs" --name aiclient2api justlikemaki/aiclient-2-api
+docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19876-19880 --restart=always -v "your_path:/app/configs" --name aiclient2api your-registry/aiclient-2-api:latest
 ```
 
 **Parameter Description**:
@@ -181,6 +128,8 @@ docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19
 - `-v "your_path:/app/configs"`: Mount configuration directory (replace "your_path" with actual path, e.g., `/home/user/aiclient-configs`)
 - `--name aiclient2api`: Container name
 
+Replace `your-registry/aiclient-2-api:latest` with your own image address. If you do not maintain a prebuilt image, use the local build workflow below.
+
 #### 🐳 Docker Compose Deployment
 
 You can also use Docker Compose for deployment. First, navigate to the `docker` directory:
@@ -188,13 +137,10 @@ You can also use Docker Compose for deployment. First, navigate to the `docker` 
 ```bash
 cd docker
 mkdir -p configs
-docker compose up -d
+docker compose up -d --build
 ```
 
-To build from source instead of using the pre-built image, edit `docker-compose.yml`:
-1. Comment out the `image: justlikemaki/aiclient-2-api:latest` line
-2. Uncomment the `build:` section
-3. Run `docker compose up -d --build`
+The default `docker/docker-compose.yml` now builds from the current repository. If you want to use your own prebuilt image instead, replace the `build:` block with `image: your-registry/aiclient-2-api:latest` and then run `docker compose up -d`.
 
 #### 1. Run the startup script
 *   **Linux/macOS**: `chmod +x install-and-run.sh && ./install-and-run.sh`
@@ -678,7 +624,7 @@ Or modify the port configuration in `configs/config.json` to use a different por
 - **Check Logs**: `docker logs aiclient2api` to view error messages
 - **Check Mount Path**: Ensure the local path in the `-v` parameter exists and has read/write permissions
 - **Check Port Conflicts**: Ensure all mapped ports are not occupied on the host
-- **Re-pull Image**: `docker pull justlikemaki/aiclient-2-api:latest`
+- **Rebuild Image**: `docker compose build --no-cache && docker compose up -d`
 
 ### 4. Credential File Not Recognized
 
@@ -799,13 +745,13 @@ The development of this project was greatly inspired by the official Google Gemi
 
 Thanks to all the developers who contributed to the AIClient-2-API project:
 
-[![Contributors](https://contrib.rocks/image?repo=justlovemaki/AIClient-2-API)](https://github.com/justlovemaki/AIClient-2-API/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=noxenys/AIClient-2-API)](https://github.com/noxenys/AIClient-2-API/graphs/contributors)
 
 
 ### 🌟 Star History
 
 
-[![Star History Chart](https://api.star-history.com/svg?repos=justlovemaki/AIClient-2-API&type=Timeline)](https://www.star-history.com/#justlovemaki/AIClient-2-API&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=noxenys/AIClient-2-API&type=Timeline)](https://www.star-history.com/#noxenys/AIClient-2-API&Timeline)
 
 ---
 

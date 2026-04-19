@@ -5,7 +5,7 @@
 
 import { promises as fs } from 'fs';
 import logger from '../../utils/logger.js';
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 

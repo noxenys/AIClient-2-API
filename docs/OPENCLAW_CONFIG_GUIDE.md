@@ -10,7 +10,7 @@ Quick configuration guide for using AIClient-2-API with OpenClaw.
 2. Configure at least one provider in Web UI (`http://localhost:3000`)
 3. Note the API Key from configuration file
 4. Install OpenClaw
-   - Docker version: [justlikemaki/openclaw-docker-cn-im](https://hub.docker.com/r/justlikemaki/openclaw-docker-cn-im)
+   - Docker version: use your own OpenClaw image or local build
    - Or use other installation methods
 
 ---

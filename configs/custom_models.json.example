@@ -1,24 +1,24 @@
 [
   {
-    "id": "my-custom-gpt-4",
-    "name": "Custom GPT-4",
-    "alias": "gpt-4",
+    "id": "my-custom-gpt-4-1",
+    "name": "Custom GPT-4.1",
+    "alias": "gpt-4.1",
     "provider": "openai-custom",
     "actualProvider": "openai-custom",
-    "actualModel": "gpt-4-0613",
+    "actualModel": "gpt-4.1",
     "contextLength": 8192,
     "maxTokens": 4096,
     "temperature": 0.7,
     "topP": 1.0,
-    "description": "Custom configuration for GPT-4"
+    "description": "Custom configuration for GPT-4.1"
   },
   {
-    "id": "claude-3-7-sonnet-custom",
-    "name": "Claude 3.7 Sonnet Custom",
-    "alias": "claude-3-7-sonnet",
+    "id": "claude-sonnet-4-6-custom",
+    "name": "Claude Sonnet 4.6 Custom",
+    "alias": "claude-sonnet-4.6",
     "provider": "claude-custom",
     "actualProvider": "claude-kiro-oauth",
-    "actualModel": "claude-3-7-sonnet-20250219",
+    "actualModel": "claude-sonnet-4-6",
     "contextLength": 200000,
     "temperature": 0.5
   },

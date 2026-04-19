@@ -123,15 +123,12 @@ const translations = {
         'dashboard.routing.nodeName.iflow': 'iFlow OAuth',
         'dashboard.routing.nodeName.codex': 'OpenAI Codex OAuth',
         'dashboard.routing.nodeName.grok': 'Grok Reverse',
-        'dashboard.contact.title': '联系与赞助',
-        'dashboard.contact.wechat': '扫码进群，注明来意',
-        'dashboard.contact.wechatDesc': '添加微信获取更多技术支持和交流',
-        'dashboard.contact.x': '关注 X.com',
-        'dashboard.contact.xDesc': '在 X 上关注我们获取最新动态',
-        'dashboard.contact.sponsor': '扫码赞助',
-        'dashboard.contact.sponsorDesc': '您的赞助是项目持续发展的动力',
-        'dashboard.contact.coffee': 'Buy me a coffee',
-        'dashboard.contact.coffeeDesc': 'If you like this project, buy me a coffee!',
+        'dashboard.contact.title': '联系信息',
+        'dashboard.contact.wechat': '社群 / 联系方式',
+        'dashboard.contact.wechatDesc': '当前未配置社群入口或联系二维码',
+        'dashboard.contact.sponsor': '购买链接 / 赞助信息',
+        'dashboard.contact.sponsorDesc': '当前未配置购买链接、收款码或赞助入口',
+        'dashboard.contact.unconfigured': '未配置',
         
         // OAuth
         'oauth.modal.title': 'OAuth 授权',
@@ -822,10 +819,10 @@ const translations = {
         'customModels.form.temperature': '温度 (Temperature)',
         'customModels.form.topP': 'Top P',
         'customModels.form.description': '模型描述',
-        'customModels.form.placeholder.id': '例如: my-custom-gpt-4',
+        'customModels.form.placeholder.id': '例如: my-custom-gpt-4-1',
         'customModels.form.placeholder.name': '给模型起个好听的名字',
-        'customModels.form.placeholder.alias': '例如: gpt-4 (调用此名称会自动映射)',
-        'customModels.form.placeholder.actual': '例如: gpt-4-0613',
+        'customModels.form.placeholder.alias': '例如: gpt-4.1 (调用此名称会自动映射)',
+        'customModels.form.placeholder.actual': '例如: gpt-4.1',
         'customModels.form.placeholder.desc': '简要描述该模型的用途...',
 
         // Models
@@ -1183,15 +1180,12 @@ const translations = {
         'dashboard.routing.nodeName.iflow': 'iFlow OAuth',
         'dashboard.routing.nodeName.codex': 'OpenAI Codex OAuth',
         'dashboard.routing.nodeName.grok': 'Grok Reverse',
-        'dashboard.contact.title': 'Contact & Support',
-        'dashboard.contact.wechat': 'Scan to Join Group',
-        'dashboard.contact.wechatDesc': 'Add WeChat for more technical support and communication',
-        'dashboard.contact.x': 'Follow on X.com',
-        'dashboard.contact.xDesc': 'Follow us on X for latest updates',
-        'dashboard.contact.sponsor': 'Scan to Support',
-        'dashboard.contact.sponsorDesc': 'Your support is the driving force for the project\'s continuous development',
-        'dashboard.contact.coffee': 'Buy me a coffee',
-        'dashboard.contact.coffeeDesc': 'If you like this project, buy me a coffee!',
+        'dashboard.contact.title': 'Contact Info',
+        'dashboard.contact.wechat': 'Community / Contact',
+        'dashboard.contact.wechatDesc': 'No community link or contact QR code configured',
+        'dashboard.contact.sponsor': 'Purchase Link / Support',
+        'dashboard.contact.sponsorDesc': 'No purchase link, payment QR code, or support entry configured',
+        'dashboard.contact.unconfigured': 'Not Configured',
         
         // OAuth
         'oauth.modal.title': 'OAuth Authorization',
@@ -1882,10 +1876,10 @@ const translations = {
         'customModels.form.temperature': 'Temperature',
         'customModels.form.topP': 'Top P',
         'customModels.form.description': 'Description',
-        'customModels.form.placeholder.id': 'e.g.: my-custom-gpt-4',
+        'customModels.form.placeholder.id': 'e.g.: my-custom-gpt-4-1',
         'customModels.form.placeholder.name': 'Enter a friendly name',
-        'customModels.form.placeholder.alias': 'e.g.: gpt-4 (auto-mapped)',
-        'customModels.form.placeholder.actual': 'e.g.: gpt-4-0613',
+        'customModels.form.placeholder.alias': 'e.g.: gpt-4.1 (auto-mapped)',
+        'customModels.form.placeholder.actual': 'e.g.: gpt-4.1',
         'customModels.form.placeholder.desc': 'Brief description of this model...',
 
         // Models
@@ -2153,80 +2147,31 @@ export function setLanguage(lang) {
     }
 }
 
-// 更新仪表盘图片
+// 确保仪表盘联系区保持空状态占位
 function updateDashboardImages(lang) {
-    const sponsorImg = document.getElementById('sponsor-img');
-    const sponsorTitle = document.getElementById('sponsor-title');
-    const sponsorDesc = document.getElementById('sponsor-desc');
-    
-    const wechatImg = document.getElementById('wechat-img');
-    const wechatIcon = document.getElementById('wechat-icon');
-    const wechatTitle = document.getElementById('wechat-title');
-    const wechatDesc = document.getElementById('wechat-desc');
+    const locale = translations[lang] ? lang : 'zh-CN';
+    const placeholderText = translations[locale]['dashboard.contact.unconfigured'];
 
-    if (lang === 'en-US') {
-        // 更新赞助图片
-        if (sponsorImg) {
-            sponsorImg.src = 'static/coffee.png';
-            sponsorImg.alt = 'Buy me a coffee';
-            if (sponsorTitle) {
-                sponsorTitle.setAttribute('data-i18n', 'dashboard.contact.coffee');
-                sponsorTitle.textContent = translations['en-US']['dashboard.contact.coffee'];
-            }
-            if (sponsorDesc) {
-                sponsorDesc.setAttribute('data-i18n', 'dashboard.contact.coffeeDesc');
-                sponsorDesc.textContent = translations['en-US']['dashboard.contact.coffeeDesc'];
-            }
-        }
-        
-        // 更新联系方式图片 (WeChat -> X.com)
-        if (wechatImg) {
-            wechatImg.src = 'static/x.com.png';
-            wechatImg.alt = 'X.com';
-            if (wechatIcon) {
-                wechatIcon.className = 'fab fa-x-twitter';
-            }
-            if (wechatTitle) {
-                wechatTitle.setAttribute('data-i18n', 'dashboard.contact.x');
-                wechatTitle.textContent = translations['en-US']['dashboard.contact.x'] || 'Follow on X.com';
-            }
-            if (wechatDesc) {
-                wechatDesc.setAttribute('data-i18n', 'dashboard.contact.xDesc');
-                wechatDesc.textContent = translations['en-US']['dashboard.contact.xDesc'] || 'Follow us on X for latest updates';
-            }
-        }
-    } else {
-        // 更新赞助图片
-        if (sponsorImg) {
-            sponsorImg.src = 'static/sponsor.png';
-            sponsorImg.alt = '赞助二维码';
-            if (sponsorTitle) {
-                sponsorTitle.setAttribute('data-i18n', 'dashboard.contact.sponsor');
-                sponsorTitle.textContent = translations['zh-CN']['dashboard.contact.sponsor'];
-            }
-            if (sponsorDesc) {
-                sponsorDesc.setAttribute('data-i18n', 'dashboard.contact.sponsorDesc');
-                sponsorDesc.textContent = translations['zh-CN']['dashboard.contact.sponsorDesc'];
-            }
+    [
+        ['wechat-img', 'wechat-placeholder'],
+        ['sponsor-img', 'sponsor-placeholder']
+    ].forEach(([imageId, placeholderId]) => {
+        const image = document.getElementById(imageId);
+        const placeholder = document.getElementById(placeholderId);
+
+        if (image) {
+            image.hidden = true;
+            image.removeAttribute('src');
+            image.removeAttribute('alt');
+            image.classList.remove('clickable-qr');
+            image.setAttribute('aria-hidden', 'true');
         }
 
-        // 更新联系方式图片 (X.com -> WeChat)
-        if (wechatImg) {
-            wechatImg.src = 'static/wechat.png';
-            wechatImg.alt = '微信二维码';
-            if (wechatIcon) {
-                wechatIcon.className = 'fab fa-weixin';
-            }
-            if (wechatTitle) {
-                wechatTitle.setAttribute('data-i18n', 'dashboard.contact.wechat');
-                wechatTitle.textContent = translations['zh-CN']['dashboard.contact.wechat'];
-            }
-            if (wechatDesc) {
-                wechatDesc.setAttribute('data-i18n', 'dashboard.contact.wechatDesc');
-                wechatDesc.textContent = translations['zh-CN']['dashboard.contact.wechatDesc'];
-            }
+        if (placeholder) {
+            placeholder.hidden = false;
+            placeholder.textContent = placeholderText;
         }
-    }
+    });
 }
 
 // 获取当前语言

@@ -139,6 +139,7 @@ export const MANAGED_MODEL_LIST_PROVIDERS = [
     'openai-custom',
     'openaiResponses-custom',
     'claude-custom',
+    'claude-kiro-oauth',
     'openai-codex-oauth',
     'grok-custom'
 ];
@@ -147,7 +148,7 @@ export const DEFAULT_PROVIDER_HEALTH_CHECK_MODELS = Object.freeze({
     'gemini-cli-oauth': 'gemini-2.5-flash',
     'gemini-antigravity': 'gemini-2.5-flash',
     'openai-custom': 'gpt-4o-mini',
-    'claude-custom': 'claude-3-7-sonnet-20250219',
+    'claude-custom': 'claude-haiku-4-5-20251001',
     'claude-kiro-oauth': 'claude-haiku-4-5-20251001',
     'openai-qwen-oauth': 'qwen3-coder-flash',
     'openai-iflow': 'qwen3-coder-plus',
@@ -170,6 +171,18 @@ const PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES = Object.freeze({
         'gemini-2.5-flash-lite',
         'gemini-3-flash-agent',
         'gemini-3-flash'
+    ],
+    'claude-custom': [
+        'claude-haiku-4-5-20251001',
+        'claude-haiku-4-5',
+        'claude-sonnet-4-6',
+        'claude-sonnet-4-5-20250929',
+        'claude-sonnet-4-5',
+        'claude-sonnet-4-20250514',
+        'claude-opus-4-7',
+        'claude-opus-4-6',
+        'claude-opus-4-5',
+        'claude-opus-4-5-20251101'
     ],
     'claude-kiro-oauth': [
         'claude-haiku-4-5-20251001',

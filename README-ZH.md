@@ -6,76 +6,24 @@
 
 **一个能将多种仅客户端内使用的大模型 API（Gemini CLI, Antigravity, Codex, Grok, Kiro ...），模拟请求，统一封装为本地 OpenAI 兼容接口的强大代理。**
 
-<a href="https://trendshift.io/repositories/15832" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15832" alt="justlovemaki%2FAIClient-2-API | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
 </div>
 
 <div align="center">
 
-<a href="https://deepwiki.com/justlovemaki/AIClient-2-API"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"  style="width: 134px; height: 23px;margin-bottom: 3px;"></a>
-
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Node.js](https://img.shields.io/badge/Node.js-≥20.0.0-green.svg)](https://nodejs.org/)
-[![Docker](https://img.shields.io/badge/docker-≥20.0.0-blue.svg)](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
-[![GitHub stars](https://img.shields.io/github/stars/justlovemaki/AIClient-2-API.svg?style=flat&label=Star)](https://github.com/justlovemaki/AIClient-2-API/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/justlovemaki/AIClient-2-API.svg)](https://github.com/justlovemaki/AIClient-2-API/issues)
+[![GitHub stars](https://img.shields.io/github/stars/noxenys/AIClient-2-API.svg?style=flat&label=Star)](https://github.com/noxenys/AIClient-2-API/stargazers)
+[![GitHub issues](https://img.shields.io/github/issues/noxenys/AIClient-2-API.svg)](https://github.com/noxenys/AIClient-2-API/issues)
 
-[**🔧 OpenClaw 配置**](./docs/OPENCLAW_CONFIG_GUIDE-ZH.md) | [**👉 中文**](./README-ZH.md) | [English](./README.md) | [日本語](./README-JA.md) | [**📚 完整文档**](https://aiproxy.justlikemaki.vip/zh/)
+[**🔧 OpenClaw 配置**](./docs/OPENCLAW_CONFIG_GUIDE-ZH.md) | [**👉 中文**](./README-ZH.md) | [English](./README.md) | [日本語](./README-JA.md) | [**📚 完整文档**](./docs/)
 
 </div>
 
 ## 💎 赞助商
 
-<table width="100%">
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://www.packyapi.com/register?aff=AIClient2API">
-        <img src="static/packycode.png" alt="PackyCode Sponsor" width="180">
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      PackyCode 是一家可靠且高效的 API 中转服务商，提供 Claude Code、Codex、Gemini 等模型的中转服务。PackyCode 为本软件用户提供特别优惠：<a href="https://www.packyapi.com/register?aff=AIClient2API">通过此链接注册</a>并在充值时输入 <strong>AIClient2API</strong> 优惠码，即可享受 <strong>10% 的折扣</strong>。
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://www.aicodemirror.com/register?invitecode=5BUE62">
-        <img src="static/aicodemirror.jpg" alt="AICodeMirror Sponsor" width="180">
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      感谢 AICodeMirror 赞助本项目！AICodeMirror 为 Claude Code / Codex / Gemini CLI 提供官方高稳定性中转服务，具备企业级并发能力、快速开票和 7/24 专属技术支持。Claude Code / Codex / Gemini 官方渠道价格仅为原价的 38% / 2% / 9%，充值还有额外优惠！AICodeMirror 为 AIClient-2-API 用户提供专属福利：<a href="https://www.aicodemirror.com/register?invitecode=5BUE62">通过此链接注册</a>即可享受首充 <strong>8折（20% off）</strong> 优惠，企业客户最高可享 75折（25% off）！
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://www.lingtrue.com/register?aff=MP34">
-        <img src="static/lingtrueapi.png" alt="LingtrueAPI Sponsor" width="180">
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      感谢 LingtrueAPI 对本项目的赞助！LingtrueAPI 是一家全球大模型API中转服务平台，提供Claude opus 4.6、GPT 5.4、Gemini 3.1 pro等多种模型API调用服务，致力于让用户以低成本、高稳定性链接全球AI能力,最大化生产效率。LingtrueAPI为本软件用户提供了特别优惠：<a href="https://www.lingtrue.com/register?aff=MP34">通过此链接注册</a>并在首次充值时输入 <strong>LingtrueAPI</strong> 优惠码即可享受 <strong>9折优惠</strong>。
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <a href="https://poixe.com/i/ebmvga">
-        <img src="static/poixeai.png" alt="Poixe AI Sponsor" width="180">
-      </a>
-    </td>
-    <td width="75%" align="left" valign="middle">
-      Poixe AI 提供可靠的 AI 模型接口服务，您可以使用平台提供的 LLM API 接口轻松构建 AI 产品，同时也可以成为供应商，为平台提供大模型资源以赚取收益。<a href="https://poixe.com/i/ebmvga">通过 AIClient-2-API 专属链接注册</a>，充值额外赠送 <strong>$5 美金</strong>。
-    </td>
-  </tr>
-  <tr>
-    <td width="25%" align="center" valign="middle">
-      <img src="static/wechat.png" alt="Sponsor Contact" width="150">
-    </td>
-    <td width="75%" align="left" valign="middle">
-      <strong>成为赞助商</strong><br>
-      如果您有意赞助本项目，请扫描左侧微信二维码（添加时请注明来意：<strong>赞助</strong>）。
-    </td>
-  </tr>
-</table>
+> 当前仓库默认不内置任何购买链接、推广链接、社群入口或二维码。
+>
+> 如需展示，请将本节替换为你自己的信息与图片资源。
 
 ---
 
@@ -102,7 +50,7 @@
 > > - **2026.01.03** - 新增主题切换功能并优化提供商池初始化，移除使用提供商默认配置的降级策略
 > - **2025.12.30** - 添加主进程管理和自动更新功能
 > - **2025.12.25** - 配置文件统一管理：所有配置集中到 `configs/` 目录，Docker 用户需更新挂载路径为 `-v "本地路径:/app/configs"`
-> - **2025.12.11** - Docker 镜像自动构建并发布到 Docker Hub: [justlikemaki/aiclient-2-api](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
+> - **2025.12.11** - 补充 Docker 部署示例和本地镜像构建流程
 > - **2025.11.30** - 新增 Antigravity 协议支持，支持通过 Google 内部接口访问 Gemini 3 Pro、Claude Sonnet 4.5 等模型
 > - **2025.11.11** - 新增 Web UI 管理控制台，支持实时配置管理和健康状态监控
 > - **2025.11.06** - 新增对 Gemini 3 预览版的支持，增强模型兼容性和性能优化
@@ -147,7 +95,7 @@
 
 - [💡 核心优势](#-核心优势)
 - [🚀 快速启动](#-快速启动)
-  - [🐳 Docker 部署](https://hub.docker.com/r/justlikemaki/aiclient-2-api)
+  - [🐳 Docker 部署](./docker)
   - [📋 核心功能](#-核心功能)
 - [🔐 授权配置指南](#-授权配置指南)
 - [📁 授权文件存储路径](#-授权文件存储路径)
@@ -168,7 +116,7 @@
 #### 🐳 Docker 快捷启动 (推荐)
 
 ```bash
-docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19876-19880 --restart=always -v "指定路径:/app/configs" --name aiclient2api justlikemaki/aiclient-2-api
+docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19876-19880 --restart=always -v "指定路径:/app/configs" --name aiclient2api your-registry/aiclient-2-api:latest
 ```
 
 **参数说明**：
@@ -178,6 +126,8 @@ docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19
 - `-v "指定路径:/app/configs"`：挂载配置目录（请将"指定路径"替换为实际路径，如 `/home/user/aiclient-configs`）
 - `--name aiclient2api`：容器名称
 
+请将 `your-registry/aiclient-2-api:latest` 替换为你自己的镜像地址；如果你没有维护预构建镜像，请直接使用下方本地构建流程。
+
 #### 🐳 Docker Compose 部署
 
 你也可以使用 Docker Compose 进行部署。首先，进入 `docker` 目录：
@@ -185,13 +135,10 @@ docker run -d -p 3000:3000 -p 8085-8086:8085-8086 -p 1455:1455 -p 19876-19880:19
 ```bash
 cd docker
 mkdir -p configs
-docker compose up -d
+docker compose up -d --build
 ```
 
-如需从源码构建而非使用预构建镜像，请编辑 `docker-compose.yml`：
-1. 注释掉 `image: justlikemaki/aiclient-2-api:latest` 行
-2. 取消 `build:` 部分的注释
-3. 运行 `docker compose up -d --build`
+默认的 `docker/docker-compose.yml` 已改为从当前仓库本地构建。如果你想改为使用自己的预构建镜像，请将 `build:` 配置块替换成 `image: your-registry/aiclient-2-api:latest`，然后执行 `docker compose up -d`。
 
 #### 1. 运行启动脚本
 *   **Linux/macOS**: `chmod +x install-and-run.sh && ./install-and-run.sh`
@@ -675,7 +622,7 @@ kill -9 <PID>
 - **检查日志**：`docker logs aiclient2api` 查看错误信息
 - **检查挂载路径**：确保 `-v` 参数中的本地路径存在且有读写权限
 - **检查端口冲突**：确保所有映射的端口在宿主机上未被占用
-- **重新拉取镜像**：`docker pull justlikemaki/aiclient-2-api:latest`
+- **重新构建镜像**：`docker compose build --no-cache && docker compose up -d`
 
 ### 4. 凭据文件无法识别
 
@@ -796,13 +743,13 @@ kill -9 <PID>
 
 感谢以下所有为 AIClient-2-API 项目做出贡献的开发者：
 
-[![Contributors](https://contrib.rocks/image?repo=justlovemaki/AIClient-2-API)](https://github.com/justlovemaki/AIClient-2-API/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=noxenys/AIClient-2-API)](https://github.com/noxenys/AIClient-2-API/graphs/contributors)
 
 
 ### 🌟 Star History
 
 
-[![Star History Chart](https://api.star-history.com/svg?repos=justlovemaki/AIClient-2-API&type=Timeline)](https://www.star-history.com/#justlovemaki/AIClient-2-API&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=noxenys/AIClient-2-API&type=Timeline)](https://www.star-history.com/#noxenys/AIClient-2-API&Timeline)
 
 ---
 

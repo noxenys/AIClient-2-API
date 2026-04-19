@@ -173,7 +173,7 @@ export class CodexApiService {
         const allowedModels = getAllowedCodexModels(this.config);
         let selectedModel = model;
         if (!allowedModels.includes(model)) {
-            const defaultModel = allowedModels[0] || 'gpt-5';
+            const defaultModel = allowedModels[0] || 'gpt-5.4-mini';
             logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
             selectedModel = defaultModel;
         }
@@ -251,7 +251,7 @@ export class CodexApiService {
         const allowedModels = getAllowedCodexModels(this.config);
         let selectedModel = model;
         if (!allowedModels.includes(model)) {
-            const defaultModel = allowedModels[0] || 'gpt-5';
+            const defaultModel = allowedModels[0] || 'gpt-5.4-mini';
             logger.warn(`[Codex] Model '${model}' not found in supported list. Falling back to default: '${defaultModel}'`);
             selectedModel = defaultModel;
         }

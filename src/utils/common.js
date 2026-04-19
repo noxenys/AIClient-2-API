@@ -56,7 +56,8 @@ import {
     getCustomModelConfig,
     getCustomModelActualProvider,
     getCustomModelListProvider,
-    normalizeModelIds
+    normalizeModelIds,
+    usesManagedModelList
 } from '../providers/provider-models.js';
 
 /**
@@ -74,6 +75,22 @@ function getConfiguredSupportedModelsFromPool(providerPoolManager, providerType)
         providerPoolManager.providerStatus[providerType]
             .flatMap(providerStatus => getConfiguredSupportedModels(providerType, providerStatus.config))
     )].sort((a, b) => a.localeCompare(b));
+}
+
+function shouldPreferCatalogModelList(providerType) {
+    return usesManagedModelList(providerType) ||
+        providerType === 'claude-kiro-oauth' ||
+        providerType.startsWith('claude-kiro-oauth-');
+}
+
+function getCatalogSupportedModelsFromPool(providerPoolManager, providerType) {
+    if (!shouldPreferCatalogModelList(providerType)) {
+        return [];
+    }
+
+    return normalizeModelIds(
+        providerPoolManager?.modelCatalogManager?.getProviderModels(providerType) || []
+    );
 }
 
 function getCustomModelEntriesForProvider(config, providerType = null, options = {}) {
@@ -1173,10 +1190,14 @@ export async function handleModelListRequest(req, res, service, endpointType, CO
             const configuredSupportedModels = pooledSupportedModels.length > 0
                 ? pooledSupportedModels
                 : getConfiguredSupportedModels(toProvider, CONFIG);
+            const catalogSupportedModels = getCatalogSupportedModelsFromPool(providerPoolManager, toProvider);
 
             if (configuredSupportedModels.length > 0) {
                 logger.info(`[ModelList] Returning configured supported models for ${toProvider}: ${configuredSupportedModels.join(', ')}`);
                 clientModelList = buildConfiguredModelListResponse(configuredSupportedModels, toProvider, endpointType);
+            } else if (catalogSupportedModels.length > 0) {
+                logger.info(`[ModelList] Returning catalog-backed models for ${toProvider}: ${catalogSupportedModels.join(', ')}`);
+                clientModelList = buildConfiguredModelListResponse(catalogSupportedModels, toProvider, endpointType);
             } else {
 
             // service 可能未在上层预先注入（例如仅改了路径 provider 前缀），这里兜底获取

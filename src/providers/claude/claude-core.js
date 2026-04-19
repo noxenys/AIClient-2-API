@@ -286,14 +286,16 @@ export class ClaudeApiService {
         } catch (error) {
             logger.warn(`[ClaudeApiService] Failed to fetch live model list, falling back to builtin models: ${error.response?.status || error.message}`);
             const models = [
-                { id: "claude-4-sonnet", name: "claude-4-sonnet" },
+                { id: "claude-haiku-4-5", name: "claude-haiku-4-5" },
+                { id: "claude-haiku-4-5-20251001", name: "claude-haiku-4-5-20251001" },
+                { id: "claude-opus-4-7", name: "claude-opus-4-7" },
+                { id: "claude-opus-4-6", name: "claude-opus-4-6" },
+                { id: "claude-opus-4-5", name: "claude-opus-4-5" },
+                { id: "claude-opus-4-5-20251101", name: "claude-opus-4-5-20251101" },
+                { id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+                { id: "claude-sonnet-4-5", name: "claude-sonnet-4-5" },
+                { id: "claude-sonnet-4-5-20250929", name: "claude-sonnet-4-5-20250929" },
                 { id: "claude-sonnet-4-20250514", name: "claude-sonnet-4-20250514" },
-                { id: "claude-opus-4-20250514", name: "claude-opus-4-20250514" },
-                { id: "claude-3-7-sonnet-20250219", name: "claude-3-7-sonnet-20250219" },
-                { id: "claude-3-5-sonnet-20241022", name: "claude-3-5-sonnet-20241022" },
-                { id: "claude-3-5-haiku-20241022", name: "claude-3-5-haiku-20241022" },
-                { id: "claude-3-opus-20240229", name: "claude-3-opus-20240229" },
-                { id: "claude-3-haiku-20240307", name: "claude-3-haiku-20240307" },
             ];
 
             return { models: models.map(m => ({ name: m.name })) };

@@ -46,7 +46,7 @@ const CORE_MODEL_MAPPING = {
     'grok-imagine-1.0-fast-edit': { name: 'imagine-image', mode: 'MODEL_MODE_FAST', modeId: 'fast' },
     'grok-imagine-1.0': { name: 'imagine-image', mode: 'MODEL_MODE_FAST', modeId: 'expert' },
     'grok-imagine-1.0-edit': { name: 'imagine-image', mode: 'MODEL_MODE_FAST', modeId: 'expert' },
-    // 'grok-imagine-1.0-video': { name: 'grok-3', mode: 'MODEL_MODE_FAST', modeId: 'fast' }
+    // 'grok-imagine-1.0-video': { name: 'grok-420', mode: 'MODEL_MODE_FAST', modeId: 'fast' }
 };
 
 const MODEL_MAPPING = { ...CORE_MODEL_MAPPING };
@@ -57,6 +57,9 @@ Object.keys(CORE_MODEL_MAPPING).forEach(key => {
 });
 
 const GROK_MODELS = Object.keys(MODEL_MAPPING);
+const DEFAULT_GROK_TEXT_MODEL = 'grok-4.20';
+const DEFAULT_GROK_MODEL_MAPPING = CORE_MODEL_MAPPING[DEFAULT_GROK_TEXT_MODEL];
+const DEFAULT_GROK_MODEL_NAME = DEFAULT_GROK_MODEL_MAPPING.name;
 
 function isGrokNsfwModel(modelId) {
     return typeof modelId === 'string' && modelId.toLowerCase().endsWith('-nsfw');
@@ -213,7 +216,7 @@ export class GrokApiService {
     _getModelMapping(modelId) {
         const rawModelId = typeof modelId === 'string' ? modelId : '';
         const normalizedModelId = normalizeGrokModelId(rawModelId);
-        return MODEL_MAPPING[normalizedModelId] || MODEL_MAPPING['grok-4.20'] || { name: 'grok-3', modeId: 'auto' };
+        return MODEL_MAPPING[normalizedModelId] || DEFAULT_GROK_MODEL_MAPPING || { name: DEFAULT_GROK_MODEL_NAME, modeId: 'auto' };
     }
 
     /**
@@ -349,7 +352,7 @@ export class GrokApiService {
         try {
             const response = await this._request({
                 url: `${this.baseUrl}/rest/rate-limits`,
-                data: { "requestKind": "DEFAULT", "modelName": "grok-3" },
+                data: { "requestKind": "DEFAULT", "modelName": DEFAULT_GROK_MODEL_NAME },
                 timeout: 30000
             });
             const data = response.data;
@@ -604,7 +607,7 @@ export class GrokApiService {
             }
         };
 
-        if (mapping.modeId && mapping.name !== 'grok-3') {
+        if (mapping.modeId && mapping.name !== DEFAULT_GROK_MODEL_NAME) {
             payload.modeId = mapping.modeId;
             // 对于特定的编辑/媒体模式，如果已经有了 modeId，某些情况下 modelName 可能需要调整或保持一致
         }
@@ -680,7 +683,7 @@ export class GrokApiService {
         // 4. 构建精简载荷
         const payload = {
             "temporary": true,
-            "modelName": "grok-3",
+            "modelName": DEFAULT_GROK_MODEL_NAME,
             "message": message,
             "toolOverrides": {
                 "videoGen": true

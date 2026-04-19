@@ -9,7 +9,7 @@ import { applySystemPromptReplacements } from '../../converters/utils.js';
 class GrokStrategy extends ProviderStrategy {
     extractModelAndStreamInfo(req, requestBody) {
         // Grok protocol usually used internally, but if exposed:
-        const model = requestBody.model || 'grok-3';
+        const model = requestBody.model || 'grok-4.20';
         const isStream = requestBody.stream !== false;
         return { model, isStream };
     }

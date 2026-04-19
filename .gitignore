@@ -41,3 +41,6 @@ tmp-local-ui.err.log
 
 # Keep tests local only
 tests/
+
+# Keep captured request/response examples local only
+src/example/
