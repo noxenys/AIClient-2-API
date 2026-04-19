@@ -454,6 +454,106 @@ async function getModelStatusManagerInstance() {
     }
 }
 
+function createEmptyUsageMetrics() {
+    return {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        cachedTokens: 0
+    };
+}
+
+function toUsageNumber(value) {
+    return Number.isFinite(Number(value)) ? Number(value) : 0;
+}
+
+function normalizeUsageCandidate(candidate) {
+    if (!candidate || typeof candidate !== 'object') {
+        return null;
+    }
+
+    if (Array.isArray(candidate)) {
+        const usage = candidate.reduce((merged, item) => mergeUsageMetrics(merged, normalizeUsageCandidate(item), { strategy: 'max' }), createEmptyUsageMetrics());
+        const hasUsage = usage.promptTokens > 0 || usage.completionTokens > 0 || usage.totalTokens > 0 || usage.cachedTokens > 0;
+        return hasUsage ? usage : null;
+    }
+
+    const usage = candidate.usage || candidate.message?.usage || candidate.usageMetadata || candidate.response?.usage || null;
+    const reasoningTokens = toUsageNumber(
+        candidate.completion_tokens_details?.reasoning_tokens ??
+        candidate.output_tokens_details?.reasoning_tokens ??
+        usage?.completion_tokens_details?.reasoning_tokens ??
+        usage?.output_tokens_details?.reasoning_tokens ??
+        usage?.thoughtsTokenCount
+    );
+    const promptTokens = toUsageNumber(
+        candidate.prompt_tokens ??
+        usage?.prompt_tokens ??
+        usage?.input_tokens ??
+        usage?.promptTokenCount ??
+        usage?.inputTokenCount
+    );
+    const completionTokens = toUsageNumber(
+        candidate.completion_tokens ??
+        usage?.completion_tokens ??
+        usage?.output_tokens ??
+        usage?.candidatesTokenCount ??
+        usage?.outputTokenCount
+    ) + reasoningTokens;
+    const totalTokens = toUsageNumber(
+        candidate.total_tokens ??
+        usage?.total_tokens ??
+        usage?.totalTokenCount
+    );
+    const cachedTokens = toUsageNumber(
+        candidate.cached_tokens ??
+        usage?.cached_tokens ??
+        usage?.cache_read_input_tokens ??
+        usage?.cachedContentTokenCount
+    );
+
+    const hasUsage = promptTokens > 0 || completionTokens > 0 || totalTokens > 0 || cachedTokens > 0;
+    if (!hasUsage) {
+        return null;
+    }
+
+    return {
+        promptTokens,
+        completionTokens,
+        totalTokens: totalTokens || (promptTokens + completionTokens),
+        cachedTokens
+    };
+}
+
+function mergeUsageMetrics(baseUsage = createEmptyUsageMetrics(), nextUsage = null, { strategy = 'sum' } = {}) {
+    if (!nextUsage) {
+        return baseUsage;
+    }
+
+    if (strategy === 'max') {
+        return {
+            promptTokens: Math.max(baseUsage.promptTokens, nextUsage.promptTokens),
+            completionTokens: Math.max(baseUsage.completionTokens, nextUsage.completionTokens),
+            totalTokens: Math.max(baseUsage.totalTokens, nextUsage.totalTokens || (nextUsage.promptTokens + nextUsage.completionTokens)),
+            cachedTokens: Math.max(baseUsage.cachedTokens, nextUsage.cachedTokens)
+        };
+    }
+
+    return {
+        promptTokens: baseUsage.promptTokens + nextUsage.promptTokens,
+        completionTokens: baseUsage.completionTokens + nextUsage.completionTokens,
+        totalTokens: baseUsage.totalTokens + nextUsage.totalTokens,
+        cachedTokens: baseUsage.cachedTokens + nextUsage.cachedTokens
+    };
+}
+
+function extractUsageMetrics(...candidates) {
+    return candidates.reduce((usage, candidate) => {
+        const normalizedUsage = normalizeUsageCandidate(candidate);
+        return mergeUsageMetrics(usage, normalizedUsage, { strategy: 'max' });
+    }, createEmptyUsageMetrics());
+}
+
 export async function handleStreamRequest(res, service, model, requestBody, fromProvider, toProvider, PROMPT_LOG_MODE, PROMPT_LOG_FILENAME, providerPoolManager, pooluuid, customName, retryContext = null) {
     let fullResponseText = '';
     let fullResponseJson = '';
@@ -471,6 +571,7 @@ export async function handleStreamRequest(res, service, model, requestBody, from
     const modelStatusManager = await getModelStatusManagerInstance();
     const attemptStartedAt = Date.now();
     let attemptRecorded = false;
+    let attemptUsage = createEmptyUsageMetrics();
 
     const recordAttemptSuccess = () => {
         if (attemptRecorded || !modelStatusManager) {
@@ -483,7 +584,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             isStream: true,
             durationMs: Date.now() - attemptStartedAt,
             pooluuid,
-            customName
+            customName,
+            usage: attemptUsage
         });
         attemptRecorded = true;
     };
@@ -501,7 +603,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             errorMessage: error?.message || String(error || ''),
             httpStatus: error?.response?.status || error?.status || null,
             pooluuid,
-            customName
+            customName,
+            usage: attemptUsage
         });
         attemptRecorded = true;
     };
@@ -517,7 +620,8 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             isStream: true,
             durationMs: Date.now() - attemptStartedAt,
             pooluuid,
-            customName
+            customName,
+            usage: attemptUsage
         });
         attemptRecorded = true;
     };
@@ -580,6 +684,11 @@ export async function handleStreamRequest(res, service, model, requestBody, from
             const chunkToSend = needsConversion
                 ? convertData(nativeChunk, 'streamChunk', toProvider, fromProvider, model, streamRequestId)
                 : nativeChunk;
+            attemptUsage = mergeUsageMetrics(
+                attemptUsage,
+                extractUsageMetrics(nativeChunk, chunkToSend),
+                { strategy: 'max' }
+            );
 
             // 监控钩子：流式响应分块
             const hookRequestId = getPluginHookRequestId(CONFIG);
@@ -888,6 +997,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
     const modelStatusManager = await getModelStatusManagerInstance();
     const attemptStartedAt = Date.now();
     let attemptRecorded = false;
+    let attemptUsage = createEmptyUsageMetrics();
     let clientDisconnected = false;
 
     const recordAttemptSuccess = () => {
@@ -901,7 +1011,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             isStream: false,
             durationMs: Date.now() - attemptStartedAt,
             pooluuid,
-            customName
+            customName,
+            usage: attemptUsage
         });
         attemptRecorded = true;
     };
@@ -919,7 +1030,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             errorMessage: error?.message || String(error || ''),
             httpStatus: error?.response?.status || error?.status || null,
             pooluuid,
-            customName
+            customName,
+            usage: attemptUsage
         });
         attemptRecorded = true;
     };
@@ -935,7 +1047,8 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             isStream: false,
             durationMs: Date.now() - attemptStartedAt,
             pooluuid,
-            customName
+            customName,
+            usage: attemptUsage
         });
         attemptRecorded = true;
     };
@@ -965,6 +1078,7 @@ export async function handleUnaryRequest(res, service, model, requestBody, fromP
             logger.info(`[Response Convert] Converting response from ${toProvider} to ${fromProvider}`);
             clientResponse = convertData(nativeResponse, 'response', toProvider, fromProvider, model);
         }
+        attemptUsage = extractUsageMetrics(nativeResponse, clientResponse);
 
         // 监控钩子：非流式响应
         const hookRequestId = getPluginHookRequestId(CONFIG);

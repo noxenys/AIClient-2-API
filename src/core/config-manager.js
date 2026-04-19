@@ -118,6 +118,8 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
         MODEL_STATUS_CACHE_FILE_PATH: 'configs/model_status_cache.json',
         MODEL_STATUS_PERSIST_INTERVAL_MS: 10 * 1000,
         MODEL_STATUS_RECENT_WINDOW_SIZE: 20,
+        MODEL_STATUS_TIMELINE_WINDOW_HOURS: 24,
+        MODEL_STATUS_TIMELINE_BUCKET_MINUTES: 60,
         SYSTEM_PROMPT_REPLACEMENTS: [], // 系统提示词内容替换规则，例如: [{"old": "AI", "new": "Bot"}, {"old": "OpenAI", "new": "Gemini"}]
         SCHEDULED_HEALTH_CHECK: {
             enabled: false,

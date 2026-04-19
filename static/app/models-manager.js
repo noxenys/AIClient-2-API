@@ -50,7 +50,10 @@ function buildModelStatusSummary(modelStatus = null) {
     }
 
     const runtime = modelStatus.runtime || {};
-    const recentSummary = modelStatus.recentSummary || {};
+    const timelineSummary = modelStatus.timelineSummary || {};
+    const recentSummary = Object.keys(timelineSummary).length > 0
+        ? timelineSummary
+        : (modelStatus.recentSummary || {});
     const metricItems = [
         {
             key: 'success',

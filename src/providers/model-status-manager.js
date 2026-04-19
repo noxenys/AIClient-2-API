@@ -16,10 +16,14 @@ import {
     normalizeProviderState
 } from '../utils/provider-state.js';
 
-const STATUS_STORE_VERSION = 1;
+const STATUS_STORE_VERSION = 2;
 const DEFAULT_PERSIST_INTERVAL_MS = 10 * 1000;
 const DEFAULT_RECENT_WINDOW_SIZE = 20;
 const MAX_RECENT_WINDOW_SIZE = 50;
+const DEFAULT_TIMELINE_WINDOW_HOURS = 24;
+const MAX_TIMELINE_WINDOW_HOURS = 7 * 24;
+const DEFAULT_TIMELINE_BUCKET_MINUTES = 60;
+const MAX_TIMELINE_BUCKET_MINUTES = 24 * 60;
 
 const STATUS_SEVERITY = {
     failing: 0,
@@ -44,6 +48,36 @@ function clampInteger(value, fallback, { min = 1, max = Number.MAX_SAFE_INTEGER 
     }
 
     return Math.min(Math.max(parsed, min), max);
+}
+
+function createUsageMetrics() {
+    return {
+        promptTokens: 0,
+        completionTokens: 0,
+        totalTokens: 0,
+        cachedTokens: 0
+    };
+}
+
+function normalizeUsageMetrics(usage = {}) {
+    return {
+        promptTokens: Number(usage?.promptTokens || 0),
+        completionTokens: Number(usage?.completionTokens || 0),
+        totalTokens: Number(usage?.totalTokens || 0),
+        cachedTokens: Number(usage?.cachedTokens || 0)
+    };
+}
+
+function mergeUsageMetrics(baseUsage = {}, nextUsage = {}) {
+    const base = normalizeUsageMetrics(baseUsage);
+    const next = normalizeUsageMetrics(nextUsage);
+
+    return {
+        promptTokens: base.promptTokens + next.promptTokens,
+        completionTokens: base.completionTokens + next.completionTokens,
+        totalTokens: base.totalTokens + next.totalTokens,
+        cachedTokens: base.cachedTokens + next.cachedTokens
+    };
 }
 
 function resolveStatusFilePath(globalConfig = {}) {
@@ -88,19 +122,22 @@ function createEmptyEntry(providerType, modelId) {
         lastErrorMessage: null,
         lastNodeUuid: null,
         lastCustomName: null,
+        ...createUsageMetrics(),
         statusCounts: {
             '401': 0,
             '403': 0,
             '429': 0,
             '5xx': 0
         },
-        recentAttempts: []
+        recentAttempts: [],
+        timelineBuckets: {}
     };
 }
 
 function normalizeRecentAttempt(attempt = {}) {
     const httpStatus = Number.parseInt(attempt.httpStatus, 10);
     const durationMs = Number.isFinite(Number(attempt.durationMs)) ? Math.max(0, Number(attempt.durationMs)) : null;
+    const usage = normalizeUsageMetrics(attempt);
 
     return {
         timestamp: attempt.timestamp || null,
@@ -110,7 +147,8 @@ function normalizeRecentAttempt(attempt = {}) {
         interrupted: attempt.interrupted === true,
         durationMs,
         failureType: attempt.failureType || null,
-        httpStatus: Number.isInteger(httpStatus) ? httpStatus : null
+        httpStatus: Number.isInteger(httpStatus) ? httpStatus : null,
+        ...usage
     };
 }
 
@@ -124,6 +162,7 @@ function summarizeRecentAttempts(recentAttempts = []) {
         streamInterruptedCount: 0,
         avgLatencyMs: null,
         successRate: null,
+        ...createUsageMetrics(),
         httpStatusCounts: {
             '401': 0,
             '403': 0,
@@ -153,6 +192,11 @@ function summarizeRecentAttempts(recentAttempts = []) {
             summary.streamInterruptedCount += 1;
         }
 
+        summary.promptTokens += Number(attempt.promptTokens || 0);
+        summary.completionTokens += Number(attempt.completionTokens || 0);
+        summary.totalTokens += Number(attempt.totalTokens || 0);
+        summary.cachedTokens += Number(attempt.cachedTokens || 0);
+
         if (attempt.durationMs !== null) {
             totalLatencyMs += attempt.durationMs;
             latencyCount += 1;
@@ -175,6 +219,152 @@ function summarizeRecentAttempts(recentAttempts = []) {
     }
 
     return summary;
+}
+
+function createEmptyTimelineBucket(startedAt = null, endedAt = null) {
+    return {
+        startedAt,
+        endedAt,
+        requestCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        abortedCount: 0,
+        streamInterruptedCount: 0,
+        totalLatencyMs: 0,
+        avgLatencyMs: null,
+        successRate: null,
+        lastFailureType: null,
+        lastHttpStatus: null,
+        ...createUsageMetrics(),
+        httpStatusCounts: {
+            '401': 0,
+            '403': 0,
+            '429': 0,
+            '5xx': 0
+        },
+        grade: 'no_data'
+    };
+}
+
+function deriveTimelineBucketGrade(bucket = {}) {
+    const successCount = Number(bucket.successCount || 0);
+    const failureCount = Number(bucket.failureCount || 0);
+    const totalCount = successCount + failureCount;
+    if (totalCount === 0) {
+        return 'no_data';
+    }
+
+    const successRate = totalCount > 0 ? successCount / totalCount : 0;
+    const hasAuthFailures = Number(bucket?.httpStatusCounts?.['401'] || 0) > 0 || Number(bucket?.httpStatusCounts?.['403'] || 0) > 0;
+    const hasRateLimits = Number(bucket?.httpStatusCounts?.['429'] || 0) > 0;
+    const hasServerFailures = Number(bucket?.httpStatusCounts?.['5xx'] || 0) > 0;
+    const hasStreamInterruptions = Number(bucket.streamInterruptedCount || 0) > 0;
+
+    if ((hasAuthFailures && successRate < 0.8) || successRate < 0.2) {
+        return 'error';
+    }
+
+    if (successRate < 0.6 || (hasServerFailures && successRate < 0.8)) {
+        return 'poor';
+    }
+
+    if (successRate < 0.8 || hasRateLimits || hasStreamInterruptions) {
+        return 'fair';
+    }
+
+    if (successRate < 0.95) {
+        return 'good';
+    }
+
+    return 'excellent';
+}
+
+function normalizeTimelineBucket(bucket = {}, startedAt = null, endedAt = null) {
+    const normalized = {
+        ...createEmptyTimelineBucket(startedAt, endedAt),
+        ...bucket,
+        startedAt: bucket.startedAt || startedAt,
+        endedAt: bucket.endedAt || endedAt,
+        requestCount: Number(bucket.requestCount || 0),
+        successCount: Number(bucket.successCount || 0),
+        failureCount: Number(bucket.failureCount || 0),
+        abortedCount: Number(bucket.abortedCount || 0),
+        streamInterruptedCount: Number(bucket.streamInterruptedCount || 0),
+        totalLatencyMs: Number(bucket.totalLatencyMs || 0),
+        lastFailureType: bucket.lastFailureType || null,
+        lastHttpStatus: Number.isInteger(Number(bucket.lastHttpStatus)) ? Number(bucket.lastHttpStatus) : null,
+        ...normalizeUsageMetrics(bucket),
+        httpStatusCounts: {
+            '401': Number(bucket?.httpStatusCounts?.['401'] || 0),
+            '403': Number(bucket?.httpStatusCounts?.['403'] || 0),
+            '429': Number(bucket?.httpStatusCounts?.['429'] || 0),
+            '5xx': Number(bucket?.httpStatusCounts?.['5xx'] || 0)
+        }
+    };
+
+    const effectiveTotal = normalized.successCount + normalized.failureCount;
+    normalized.avgLatencyMs = normalized.requestCount > 0
+        ? Math.round(normalized.totalLatencyMs / Math.max(1, normalized.requestCount))
+        : null;
+    normalized.successRate = effectiveTotal > 0
+        ? Number((normalized.successCount / effectiveTotal).toFixed(4))
+        : null;
+    normalized.grade = deriveTimelineBucketGrade(normalized);
+
+    return normalized;
+}
+
+function updateTimelineBucketAttempt(bucket = {}, attempt = {}) {
+    const normalizedAttempt = normalizeRecentAttempt(attempt);
+
+    bucket.requestCount += 1;
+    if (normalizedAttempt.aborted) {
+        bucket.abortedCount += 1;
+    } else if (normalizedAttempt.success) {
+        bucket.successCount += 1;
+    } else {
+        bucket.failureCount += 1;
+        bucket.lastFailureType = normalizedAttempt.failureType || bucket.lastFailureType || null;
+        bucket.lastHttpStatus = normalizedAttempt.httpStatus ?? bucket.lastHttpStatus ?? null;
+    }
+
+    if (normalizedAttempt.interrupted) {
+        bucket.streamInterruptedCount += 1;
+    }
+
+    if (normalizedAttempt.httpStatus === 401) bucket.httpStatusCounts['401'] += 1;
+    if (normalizedAttempt.httpStatus === 403) bucket.httpStatusCounts['403'] += 1;
+    if (normalizedAttempt.httpStatus === 429) bucket.httpStatusCounts['429'] += 1;
+    if (normalizedAttempt.httpStatus !== null && normalizedAttempt.httpStatus >= 500 && normalizedAttempt.httpStatus <= 599) {
+        bucket.httpStatusCounts['5xx'] += 1;
+    }
+
+    bucket.totalLatencyMs += Number(normalizedAttempt.durationMs || 0);
+    const usage = normalizeUsageMetrics(normalizedAttempt);
+    bucket.promptTokens += usage.promptTokens;
+    bucket.completionTokens += usage.completionTokens;
+    bucket.totalTokens += usage.totalTokens;
+    bucket.cachedTokens += usage.cachedTokens;
+
+    return normalizeTimelineBucket(bucket);
+}
+
+function pruneTimelineBuckets(rawBuckets = {}, {
+    bucketMinutes = DEFAULT_TIMELINE_BUCKET_MINUTES,
+    windowHours = DEFAULT_TIMELINE_WINDOW_HOURS,
+    now = Date.now()
+} = {}) {
+    const bucketMs = bucketMinutes * 60 * 1000;
+    const totalBuckets = Math.max(1, Math.ceil(windowHours * 60 / bucketMinutes));
+    const currentBucketStart = Math.floor(now / bucketMs) * bucketMs;
+    const earliestBucketStart = currentBucketStart - ((totalBuckets - 1) * bucketMs);
+
+    return Object.fromEntries(
+        Object.entries(rawBuckets || {}).filter(([bucketKey]) => {
+            const bucketStart = Number(bucketKey);
+            return Number.isFinite(bucketStart) && bucketStart >= earliestBucketStart && bucketStart <= currentBucketStart;
+        })
+    );
 }
 
 function deriveModelHealthStatus(entry = {}, recentSummary = summarizeRecentAttempts()) {
@@ -217,7 +407,20 @@ function deriveModelHealthStatus(entry = {}, recentSummary = summarizeRecentAtte
     return 'healthy';
 }
 
-function normalizeEntry(providerType, modelId, entry = {}, recentWindowSize = DEFAULT_RECENT_WINDOW_SIZE) {
+function normalizeEntry(
+    providerType,
+    modelId,
+    entry = {},
+    recentWindowSize = DEFAULT_RECENT_WINDOW_SIZE,
+    {
+        timelineBucketMinutes = DEFAULT_TIMELINE_BUCKET_MINUTES,
+        timelineWindowHours = DEFAULT_TIMELINE_WINDOW_HOURS
+    } = {}
+) {
+    const prunedTimelineBuckets = pruneTimelineBuckets(entry.timelineBuckets, {
+        bucketMinutes: timelineBucketMinutes,
+        windowHours: timelineWindowHours
+    });
     const normalized = {
         ...createEmptyEntry(providerType, modelId),
         ...entry,
@@ -245,6 +448,7 @@ function normalizeEntry(providerType, modelId, entry = {}, recentWindowSize = DE
         lastErrorMessage: entry.lastErrorMessage || null,
         lastNodeUuid: entry.lastNodeUuid || null,
         lastCustomName: entry.lastCustomName || null,
+        ...normalizeUsageMetrics(entry),
         statusCounts: {
             '401': Number(entry?.statusCounts?.['401'] || 0),
             '403': Number(entry?.statusCounts?.['403'] || 0),
@@ -253,7 +457,13 @@ function normalizeEntry(providerType, modelId, entry = {}, recentWindowSize = DE
         },
         recentAttempts: Array.isArray(entry.recentAttempts)
             ? entry.recentAttempts.slice(-recentWindowSize).map(normalizeRecentAttempt)
-            : []
+            : [],
+        timelineBuckets: Object.fromEntries(
+            Object.entries(prunedTimelineBuckets).map(([bucketKey, bucketValue]) => [
+                bucketKey,
+                normalizeTimelineBucket(bucketValue)
+            ])
+        )
     };
 
     normalized.avgLatencyMs = normalized.requestCount > 0
@@ -268,6 +478,166 @@ function normalizeEntry(providerType, modelId, entry = {}, recentWindowSize = DE
     return normalized;
 }
 
+function buildTimelineSummary(timeline = []) {
+    const summary = {
+        bucketCount: Array.isArray(timeline) ? timeline.length : 0,
+        activeBucketCount: 0,
+        requestCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        abortedCount: 0,
+        streamInterruptedCount: 0,
+        avgLatencyMs: null,
+        successRate: null,
+        grade: 'no_data',
+        ...createUsageMetrics(),
+        httpStatusCounts: {
+            '401': 0,
+            '403': 0,
+            '429': 0,
+            '5xx': 0
+        }
+    };
+
+    let totalLatencyMs = 0;
+
+    (Array.isArray(timeline) ? timeline : []).forEach(bucket => {
+        summary.requestCount += Number(bucket.requestCount || 0);
+        summary.successCount += Number(bucket.successCount || 0);
+        summary.failureCount += Number(bucket.failureCount || 0);
+        summary.abortedCount += Number(bucket.abortedCount || 0);
+        summary.streamInterruptedCount += Number(bucket.streamInterruptedCount || 0);
+        summary.promptTokens += Number(bucket.promptTokens || 0);
+        summary.completionTokens += Number(bucket.completionTokens || 0);
+        summary.totalTokens += Number(bucket.totalTokens || 0);
+        summary.cachedTokens += Number(bucket.cachedTokens || 0);
+        summary.httpStatusCounts['401'] += Number(bucket?.httpStatusCounts?.['401'] || 0);
+        summary.httpStatusCounts['403'] += Number(bucket?.httpStatusCounts?.['403'] || 0);
+        summary.httpStatusCounts['429'] += Number(bucket?.httpStatusCounts?.['429'] || 0);
+        summary.httpStatusCounts['5xx'] += Number(bucket?.httpStatusCounts?.['5xx'] || 0);
+        totalLatencyMs += Number(bucket.totalLatencyMs || 0);
+
+        if (Number(bucket.requestCount || 0) > 0) {
+            summary.activeBucketCount += 1;
+        }
+    });
+
+    const effectiveTotal = summary.successCount + summary.failureCount;
+    summary.avgLatencyMs = summary.requestCount > 0
+        ? Math.round(totalLatencyMs / Math.max(1, summary.requestCount))
+        : null;
+    summary.successRate = effectiveTotal > 0
+        ? Number((summary.successCount / effectiveTotal).toFixed(4))
+        : null;
+    summary.grade = deriveTimelineBucketGrade(summary);
+
+    return summary;
+}
+
+function buildTimeline(entry = {}, {
+    bucketMinutes = DEFAULT_TIMELINE_BUCKET_MINUTES,
+    windowHours = DEFAULT_TIMELINE_WINDOW_HOURS,
+    now = Date.now()
+} = {}) {
+    const bucketMs = bucketMinutes * 60 * 1000;
+    const totalBuckets = Math.max(1, Math.ceil(windowHours * 60 / bucketMinutes));
+    const currentBucketStart = Math.floor(now / bucketMs) * bucketMs;
+    const earliestBucketStart = currentBucketStart - ((totalBuckets - 1) * bucketMs);
+    const timeline = [];
+
+    for (let index = 0; index < totalBuckets; index += 1) {
+        const bucketStart = earliestBucketStart + (index * bucketMs);
+        const bucketEnd = bucketStart + bucketMs;
+        const bucketKey = String(bucketStart);
+        const normalizedBucket = normalizeTimelineBucket(
+            entry?.timelineBuckets?.[bucketKey],
+            new Date(bucketStart).toISOString(),
+            new Date(bucketEnd).toISOString()
+        );
+
+        timeline.push({
+            id: bucketKey,
+            index,
+            startedAt: normalizedBucket.startedAt,
+            endedAt: normalizedBucket.endedAt,
+            isCurrent: bucketStart === currentBucketStart,
+            ...normalizedBucket
+        });
+    }
+
+    return timeline;
+}
+
+function buildProviderDashboardSummary(items = []) {
+    const summary = {
+        totalModels: items.length,
+        activeModels: 0,
+        excellentCount: 0,
+        goodCount: 0,
+        fairCount: 0,
+        poorCount: 0,
+        errorCount: 0,
+        requestCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        abortedCount: 0,
+        streamInterruptedCount: 0,
+        avgLatencyMs: null,
+        successRate: null,
+        highQualityCount: 0,
+        ...createUsageMetrics(),
+        httpStatusCounts: {
+            '401': 0,
+            '403': 0,
+            '429': 0,
+            '5xx': 0
+        }
+    };
+
+    let totalLatencyMs = 0;
+
+    items.forEach(item => {
+        const timelineSummary = item.timelineSummary || {};
+        const grade = String(timelineSummary.grade || 'no_data');
+        summary.requestCount += Number(timelineSummary.requestCount || 0);
+        summary.successCount += Number(timelineSummary.successCount || 0);
+        summary.failureCount += Number(timelineSummary.failureCount || 0);
+        summary.abortedCount += Number(timelineSummary.abortedCount || 0);
+        summary.streamInterruptedCount += Number(timelineSummary.streamInterruptedCount || 0);
+        summary.promptTokens += Number(timelineSummary.promptTokens || 0);
+        summary.completionTokens += Number(timelineSummary.completionTokens || 0);
+        summary.totalTokens += Number(timelineSummary.totalTokens || 0);
+        summary.cachedTokens += Number(timelineSummary.cachedTokens || 0);
+        summary.httpStatusCounts['401'] += Number(timelineSummary?.httpStatusCounts?.['401'] || 0);
+        summary.httpStatusCounts['403'] += Number(timelineSummary?.httpStatusCounts?.['403'] || 0);
+        summary.httpStatusCounts['429'] += Number(timelineSummary?.httpStatusCounts?.['429'] || 0);
+        summary.httpStatusCounts['5xx'] += Number(timelineSummary?.httpStatusCounts?.['5xx'] || 0);
+        totalLatencyMs += Number(timelineSummary.avgLatencyMs || 0) * Number(timelineSummary.requestCount || 0);
+
+        if (Number(timelineSummary.requestCount || 0) > 0) {
+            summary.activeModels += 1;
+        }
+
+        if (grade === 'excellent') summary.excellentCount += 1;
+        else if (grade === 'good') summary.goodCount += 1;
+        else if (grade === 'fair') summary.fairCount += 1;
+        else if (grade === 'poor') summary.poorCount += 1;
+        else if (grade === 'error') summary.errorCount += 1;
+    });
+
+    summary.highQualityCount = summary.excellentCount + summary.goodCount;
+
+    const effectiveTotal = summary.successCount + summary.failureCount;
+    summary.avgLatencyMs = summary.requestCount > 0
+        ? Math.round(totalLatencyMs / Math.max(1, summary.requestCount))
+        : null;
+    summary.successRate = effectiveTotal > 0
+        ? Number((summary.successCount / effectiveTotal).toFixed(4))
+        : null;
+
+    return summary;
+}
+
 function buildProviderSummary(items = []) {
     const summary = {
         totalModels: items.length,
@@ -280,6 +650,7 @@ function buildProviderSummary(items = []) {
         failureCount: 0,
         abortedCount: 0,
         streamInterruptedCount: 0,
+        ...createUsageMetrics(),
         recent401Count: 0,
         recent403Count: 0,
         recent429Count: 0,
@@ -297,6 +668,10 @@ function buildProviderSummary(items = []) {
         summary.failureCount += Number(item.failureCount || 0);
         summary.abortedCount += Number(item.abortedCount || 0);
         summary.streamInterruptedCount += Number(item.streamInterruptedCount || 0);
+        summary.promptTokens += Number(item.promptTokens || 0);
+        summary.completionTokens += Number(item.completionTokens || 0);
+        summary.totalTokens += Number(item.totalTokens || 0);
+        summary.cachedTokens += Number(item.cachedTokens || 0);
         summary.recent401Count += Number(item.recentSummary?.httpStatusCounts?.['401'] || 0);
         summary.recent403Count += Number(item.recentSummary?.httpStatusCounts?.['403'] || 0);
         summary.recent429Count += Number(item.recentSummary?.httpStatusCounts?.['429'] || 0);
@@ -389,6 +764,30 @@ export class ModelStatusManager {
         );
     }
 
+    getTimelineWindowHours() {
+        return clampInteger(
+            this.globalConfig?.MODEL_STATUS_TIMELINE_WINDOW_HOURS,
+            DEFAULT_TIMELINE_WINDOW_HOURS,
+            { min: 1, max: MAX_TIMELINE_WINDOW_HOURS }
+        );
+    }
+
+    getTimelineBucketMinutes() {
+        return clampInteger(
+            this.globalConfig?.MODEL_STATUS_TIMELINE_BUCKET_MINUTES,
+            DEFAULT_TIMELINE_BUCKET_MINUTES,
+            { min: 5, max: MAX_TIMELINE_BUCKET_MINUTES }
+        );
+    }
+
+    _getTimelineOptions(now = Date.now()) {
+        return {
+            timelineWindowHours: this.getTimelineWindowHours(),
+            timelineBucketMinutes: this.getTimelineBucketMinutes(),
+            now
+        };
+    }
+
     getStatusFilePath() {
         return resolveStatusFilePath(this.globalConfig);
     }
@@ -407,12 +806,13 @@ export class ModelStatusManager {
         try {
             const payload = JSON.parse(readFileSync(filePath, 'utf8'));
             const recentWindowSize = this.getRecentWindowSize();
+            const timelineOptions = this._getTimelineOptions();
             const providers = {};
 
             Object.entries(payload?.providers || {}).forEach(([providerType, models]) => {
                 providers[providerType] = {};
                 Object.entries(models || {}).forEach(([modelId, entry]) => {
-                    providers[providerType][modelId] = normalizeEntry(providerType, modelId, entry, recentWindowSize);
+                    providers[providerType][modelId] = normalizeEntry(providerType, modelId, entry, recentWindowSize, timelineOptions);
                 });
             });
 
@@ -481,8 +881,15 @@ export class ModelStatusManager {
         }
 
         const recentWindowSize = this.getRecentWindowSize();
+        const timelineOptions = this._getTimelineOptions();
         const existing = this.store.providers[providerType][modelId];
-        const normalized = normalizeEntry(providerType, modelId, existing || createEmptyEntry(providerType, modelId), recentWindowSize);
+        const normalized = normalizeEntry(
+            providerType,
+            modelId,
+            existing || createEmptyEntry(providerType, modelId),
+            recentWindowSize,
+            timelineOptions
+        );
         this.store.providers[providerType][modelId] = normalized;
         return normalized;
     }
@@ -499,6 +906,31 @@ export class ModelStatusManager {
         entry.avgLatencyMs = entry.requestCount > 0
             ? Math.round(entry.totalLatencyMs / Math.max(1, entry.requestCount))
             : 0;
+    }
+
+    _appendTimelineAttempt(entry, attempt) {
+        const timelineOptions = this._getTimelineOptions();
+        const bucketMinutes = timelineOptions.timelineBucketMinutes;
+        const bucketMs = bucketMinutes * 60 * 1000;
+        const attemptTimestamp = Date.parse(attempt?.timestamp || '');
+        const effectiveTimestamp = Number.isFinite(attemptTimestamp) ? attemptTimestamp : Date.now();
+        const bucketStartMs = Math.floor(effectiveTimestamp / bucketMs) * bucketMs;
+        const bucketKey = String(bucketStartMs);
+        const existingBucket = normalizeTimelineBucket(
+            entry.timelineBuckets?.[bucketKey],
+            new Date(bucketStartMs).toISOString(),
+            new Date(bucketStartMs + bucketMs).toISOString()
+        );
+        const updatedBucket = updateTimelineBucketAttempt(existingBucket, attempt);
+
+        entry.timelineBuckets = pruneTimelineBuckets({
+            ...(entry.timelineBuckets || {}),
+            [bucketKey]: updatedBucket
+        }, {
+            bucketMinutes,
+            windowHours: timelineOptions.timelineWindowHours,
+            now: effectiveTimestamp
+        });
     }
 
     _getKnownProviderTypes(providerTypes = null) {
@@ -604,10 +1036,24 @@ export class ModelStatusManager {
     }
 
     _decorateEntry(providerType, modelId) {
-        const entry = normalizeEntry(providerType, modelId, this.store?.providers?.[providerType]?.[modelId] || {}, this.getRecentWindowSize());
+        const timelineOptions = this._getTimelineOptions();
+        const entry = normalizeEntry(
+            providerType,
+            modelId,
+            this.store?.providers?.[providerType]?.[modelId] || {},
+            this.getRecentWindowSize(),
+            timelineOptions
+        );
+        const timeline = buildTimeline(entry, {
+            bucketMinutes: timelineOptions.timelineBucketMinutes,
+            windowHours: timelineOptions.timelineWindowHours
+        });
+        const timelineSummary = buildTimelineSummary(timeline);
         const catalogEntry = this.providerCatalogManager?.getProviderEntry(providerType) || null;
         return {
             ...entry,
+            timeline,
+            timelineSummary,
             runtime: this._buildRuntimeSummary(providerType, modelId),
             catalogStatus: catalogEntry?.status || 'unknown',
             catalogSource: catalogEntry?.source || '',
@@ -628,8 +1074,8 @@ export class ModelStatusManager {
                         return severityDiff;
                     }
 
-                    const leftRequests = Number(left.requestCount || 0);
-                    const rightRequests = Number(right.requestCount || 0);
+                    const leftRequests = Number(left.timelineSummary?.requestCount || left.requestCount || 0);
+                    const rightRequests = Number(right.timelineSummary?.requestCount || right.requestCount || 0);
                     if (leftRequests !== rightRequests) {
                         return rightRequests - leftRequests;
                     }
@@ -640,6 +1086,7 @@ export class ModelStatusManager {
             providers[providerType] = {
                 providerType,
                 summary: buildProviderSummary(items),
+                dashboardSummary: buildProviderDashboardSummary(items),
                 items,
                 byModel: Object.fromEntries(items.map(item => [item.modelId, item]))
             };
@@ -649,6 +1096,8 @@ export class ModelStatusManager {
             version: this.store?.version || STATUS_STORE_VERSION,
             updatedAt: this.store?.updatedAt || null,
             recentWindowSize: this.getRecentWindowSize(),
+            timelineWindowHours: this.getTimelineWindowHours(),
+            timelineBucketMinutes: this.getTimelineBucketMinutes(),
             persistIntervalMs: this.getPersistIntervalMs(),
             filePath: this.globalConfig?.MODEL_STATUS_CACHE_FILE_PATH || 'configs/model_status_cache.json',
             providers
@@ -677,7 +1126,8 @@ export class ModelStatusManager {
         isStream = false,
         durationMs = null,
         pooluuid = null,
-        customName = null
+        customName = null,
+        usage = null
     } = {}) {
         if (!providerType || !modelId) {
             return;
@@ -696,6 +1146,7 @@ export class ModelStatusManager {
         entry.lastErrorMessage = null;
         entry.lastNodeUuid = pooluuid || entry.lastNodeUuid || null;
         entry.lastCustomName = customName || entry.lastCustomName || null;
+        Object.assign(entry, mergeUsageMetrics(entry, usage));
 
         if (isStream) {
             entry.streamCount += 1;
@@ -714,7 +1165,15 @@ export class ModelStatusManager {
             timestamp,
             success: true,
             isStream,
-            durationMs: latency
+            durationMs: latency,
+            ...normalizeUsageMetrics(usage)
+        });
+        this._appendTimelineAttempt(entry, {
+            timestamp,
+            success: true,
+            isStream,
+            durationMs: latency,
+            ...normalizeUsageMetrics(usage)
         });
         this._markDirty();
         this._broadcastUpdate('success', providerType, modelId, entry);
@@ -728,7 +1187,8 @@ export class ModelStatusManager {
         errorMessage = '',
         httpStatus = null,
         pooluuid = null,
-        customName = null
+        customName = null,
+        usage = null
     } = {}) {
         if (!providerType || !modelId) {
             return;
@@ -753,6 +1213,7 @@ export class ModelStatusManager {
         entry.lastErrorMessage = String(errorMessage || '').trim() || null;
         entry.lastNodeUuid = pooluuid || entry.lastNodeUuid || null;
         entry.lastCustomName = customName || entry.lastCustomName || null;
+        Object.assign(entry, mergeUsageMetrics(entry, usage));
 
         if (isStream) {
             entry.streamCount += 1;
@@ -784,7 +1245,18 @@ export class ModelStatusManager {
             interrupted,
             durationMs: latency,
             failureType,
-            httpStatus: normalizedStatus
+            httpStatus: normalizedStatus,
+            ...normalizeUsageMetrics(usage)
+        });
+        this._appendTimelineAttempt(entry, {
+            timestamp,
+            success: false,
+            isStream,
+            interrupted,
+            durationMs: latency,
+            failureType,
+            httpStatus: normalizedStatus,
+            ...normalizeUsageMetrics(usage)
         });
         this._markDirty();
         this._broadcastUpdate('failure', providerType, modelId, entry);
@@ -796,7 +1268,8 @@ export class ModelStatusManager {
         isStream = false,
         durationMs = null,
         pooluuid = null,
-        customName = null
+        customName = null,
+        usage = null
     } = {}) {
         if (!providerType || !modelId) {
             return;
@@ -812,6 +1285,7 @@ export class ModelStatusManager {
         entry.lastAbortAt = timestamp;
         entry.lastNodeUuid = pooluuid || entry.lastNodeUuid || null;
         entry.lastCustomName = customName || entry.lastCustomName || null;
+        Object.assign(entry, mergeUsageMetrics(entry, usage));
 
         if (isStream) {
             entry.streamCount += 1;
@@ -828,7 +1302,15 @@ export class ModelStatusManager {
             timestamp,
             aborted: true,
             isStream,
-            durationMs: latency
+            durationMs: latency,
+            ...normalizeUsageMetrics(usage)
+        });
+        this._appendTimelineAttempt(entry, {
+            timestamp,
+            aborted: true,
+            isStream,
+            durationMs: latency,
+            ...normalizeUsageMetrics(usage)
         });
         this._markDirty();
         this._broadcastUpdate('aborted', providerType, modelId, entry);

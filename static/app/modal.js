@@ -30,6 +30,7 @@ let currentTotalPages = 1;
 let currentProviderSummary = {};
 let currentProviderCatalog = null;
 let currentProviderModelStatus = null;
+let providerModelStatusSearchTerm = '';
 let currentProviderFilters = getDefaultProviderFilters();
 let providerFetchSequence = 0;
 let providerCatalogFetchSequence = 0;
@@ -156,10 +157,13 @@ function normalizeProviderModelStatusPayload(payload = {}, providerType = '') {
         providerType,
         updatedAt: payload?.updatedAt || null,
         recentWindowSize: payload?.recentWindowSize ?? null,
+        timelineWindowHours: payload?.timelineWindowHours ?? null,
+        timelineBucketMinutes: payload?.timelineBucketMinutes ?? null,
         filePath: payload?.filePath || '',
         entry: payload?.providers?.[providerType] || {
             providerType,
             summary: {},
+            dashboardSummary: {},
             items: [],
             byModel: {}
         },
@@ -705,35 +709,148 @@ function formatModelStatusLatency(value) {
     return `${(numeric / 1000).toFixed(1)} s`;
 }
 
+function formatCompactMetricNumber(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+        return '-';
+    }
+
+    try {
+        return new Intl.NumberFormat(getCurrentLanguage(), {
+            notation: 'compact',
+            maximumFractionDigits: numeric >= 100 ? 0 : 1
+        }).format(numeric);
+    } catch (error) {
+        return numeric.toLocaleString(getCurrentLanguage());
+    }
+}
+
+function formatTimelineBucketLabel(value) {
+    if (!value) {
+        return '';
+    }
+
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) {
+        return '';
+    }
+
+    return date.toLocaleTimeString(getCurrentLanguage(), {
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
+function formatTimelineGradeLabel(grade = 'no_data') {
+    const normalizedGrade = String(grade || 'no_data').trim().toLowerCase() || 'no_data';
+    return translateOrFallback(`modal.provider.modelStatus.grade.${normalizedGrade}`, normalizedGrade);
+}
+
+function getTimelineGradeClass(grade = 'no_data') {
+    const normalizedGrade = String(grade || 'no_data').trim().toLowerCase() || 'no_data';
+    return ['excellent', 'good', 'fair', 'poor', 'error', 'no_data'].includes(normalizedGrade)
+        ? normalizedGrade
+        : 'no_data';
+}
+
+function renderProviderModelStatusMetricCard(label, value, hint = '', tone = 'default') {
+    return `
+        <div class="provider-model-status-metric tone-${escapeHtml(tone)}">
+            <span class="label">${escapeHtml(label)}</span>
+            <span class="value">${escapeHtml(value)}</span>
+            ${hint ? `<span class="hint">${escapeHtml(hint)}</span>` : ''}
+        </div>
+    `;
+}
+
+function buildProviderModelStatusBucketTitle(bucket = {}) {
+    const startedAt = formatTimelineBucketLabel(bucket.startedAt);
+    const endedAt = formatTimelineBucketLabel(bucket.endedAt);
+    const timeRange = startedAt && endedAt ? `${startedAt} - ${endedAt}` : startedAt || endedAt || '-';
+    const successRate = formatModelStatusRate(bucket.successRate);
+    const metricLines = [
+        `${translateOrFallback('modal.provider.modelStatus.bucket.time', '时间')}: ${timeRange}`,
+        `${translateOrFallback('modal.provider.modelStatus.bucket.grade', '状态')}: ${formatTimelineGradeLabel(bucket.grade)}`,
+        `${translateOrFallback('modal.provider.modelStatus.metric.successRate', '成功率')}: ${successRate}`,
+        `${translateOrFallback('modal.provider.modelStatus.metric.requests', '请求数')}: ${bucket.requestCount ?? 0}`,
+        `429: ${bucket?.httpStatusCounts?.['429'] ?? 0}`,
+        `401/403: ${(bucket?.httpStatusCounts?.['401'] ?? 0) + (bucket?.httpStatusCounts?.['403'] ?? 0)}`
+    ];
+
+    if (bucket.totalTokens > 0) {
+        metricLines.push(`${translateOrFallback('modal.provider.modelStatus.metric.totalTokens', 'Token')}: ${formatCompactMetricNumber(bucket.totalTokens)}`);
+    }
+
+    if (bucket.lastFailureType) {
+        metricLines.push(`${translateOrFallback('modal.provider.modelStatus.metric.lastFailure', '最近故障')}: ${bucket.lastFailureType}`);
+    }
+
+    return metricLines.join('\n');
+}
+
+function renderProviderModelStatusAxis(items = []) {
+    const baseTimeline = Array.isArray(items[0]?.timeline) ? items[0].timeline : [];
+    if (baseTimeline.length === 0) {
+        return '';
+    }
+
+    const step = Math.max(1, Math.floor(baseTimeline.length / 8));
+    return `
+        <div class="provider-model-status-axis" style="grid-template-columns: repeat(${baseTimeline.length}, minmax(0, 1fr));">
+            ${baseTimeline.map((bucket, index) => `
+                <span class="provider-model-status-axis-label ${index % step === 0 || index === baseTimeline.length - 1 ? 'is-visible' : ''}">
+                    ${index % step === 0 || index === baseTimeline.length - 1 ? escapeHtml(formatTimelineBucketLabel(bucket.startedAt)) : ''}
+                </span>
+            `).join('')}
+        </div>
+    `;
+}
+
 function renderProviderModelStatusItem(item = {}) {
     const runtime = item.runtime || {};
-    const recentSummary = item.recentSummary || {};
+    const timeline = Array.isArray(item.timeline) ? item.timeline : [];
+    const timelineSummary = item.timelineSummary || {};
     const status = String(item.status || 'unknown').trim().toLowerCase() || 'unknown';
-    const metricItems = [
-        `${translateOrFallback('modal.provider.modelStatus.metric.successRate', '成功率')}: ${formatModelStatusRate(recentSummary.successRate ?? item.successRate)}`,
+    const gradeClass = getTimelineGradeClass(timelineSummary.grade);
+    const trafficValue = Number(timelineSummary.totalTokens || 0) > 0
+        ? `${formatCompactMetricNumber(timelineSummary.totalTokens)} ${translateOrFallback('modal.provider.modelStatus.metric.totalTokensShort', 'Tokens')}`
+        : `${formatCompactMetricNumber(timelineSummary.requestCount || 0)} ${translateOrFallback('modal.provider.modelStatus.metric.requestsShort', 'Req')}`;
+    const secondaryMeta = [
         `${translateOrFallback('modal.provider.modelStatus.metric.nodes', '节点')}: ${runtime.selectableNodeCount ?? 0}/${runtime.supportingNodeCount ?? 0}`,
-        `429: ${recentSummary.httpStatusCounts?.['429'] ?? 0}`,
-        `401/403: ${(recentSummary.httpStatusCounts?.['401'] ?? 0) + (recentSummary.httpStatusCounts?.['403'] ?? 0)}`,
-        `${translateOrFallback('modal.provider.modelStatus.metric.streamInterrupted', '流中断')}: ${recentSummary.streamInterruptedCount ?? 0}`,
-        `${translateOrFallback('modal.provider.modelStatus.metric.latency', '延迟')}: ${formatModelStatusLatency(recentSummary.avgLatencyMs ?? item.avgLatencyMs)}`
+        `429: ${timelineSummary?.httpStatusCounts?.['429'] ?? 0}`,
+        `401/403: ${(timelineSummary?.httpStatusCounts?.['401'] ?? 0) + (timelineSummary?.httpStatusCounts?.['403'] ?? 0)}`,
+        `${translateOrFallback('modal.provider.modelStatus.metric.latency', '延迟')}: ${formatModelStatusLatency(timelineSummary.avgLatencyMs ?? item.avgLatencyMs)}`
     ];
 
     if (item.lastFailureType) {
-        metricItems.push(`${translateOrFallback('modal.provider.modelStatus.metric.lastFailure', '最近故障')}: ${item.lastFailureType}`);
-    }
-
-    if (item.lastFailureAt) {
-        metricItems.push(`${translateOrFallback('modal.provider.modelStatus.metric.lastFailureAt', '故障时间')}: ${formatProviderDateTime(item.lastFailureAt)}`);
+        secondaryMeta.push(`${translateOrFallback('modal.provider.modelStatus.metric.lastFailure', '最近故障')}: ${item.lastFailureType}`);
     }
 
     return `
-        <div class="provider-model-status-item">
+        <div class="provider-model-status-item tone-${escapeHtml(gradeClass)}">
             <div class="provider-model-status-item-header">
-                <code class="provider-model-status-name">${escapeHtml(item.modelId || '-')}</code>
+                <div class="provider-model-status-item-main">
+                    <span class="provider-model-status-accent grade-${escapeHtml(gradeClass)}"></span>
+                    <div class="provider-model-status-item-copy">
+                        <code class="provider-model-status-name">${escapeHtml(item.modelId || '-')}</code>
+                        <div class="provider-model-status-item-stats">
+                            <span class="provider-model-status-rate grade-${escapeHtml(gradeClass)}">${escapeHtml(formatModelStatusRate(timelineSummary.successRate))}</span>
+                            <span class="provider-model-status-volume">${escapeHtml(trafficValue)}</span>
+                        </div>
+                    </div>
+                </div>
                 <span class="provider-model-status-badge status-${escapeHtml(status)}">${escapeHtml(formatModelStatusLabel(status))}</span>
             </div>
+            <div class="provider-model-status-timeline" style="grid-template-columns: repeat(${Math.max(timeline.length, 1)}, minmax(0, 1fr));">
+                ${timeline.map(bucket => `
+                    <span
+                        class="provider-model-status-bucket grade-${escapeHtml(getTimelineGradeClass(bucket.grade))} ${bucket.isCurrent ? 'is-current' : ''}"
+                        title="${escapeHtml(buildProviderModelStatusBucketTitle(bucket))}"
+                    ></span>
+                `).join('')}
+            </div>
             <div class="provider-model-status-item-meta">
-                ${metricItems.map(metric => `<span class="provider-model-status-chip">${escapeHtml(metric)}</span>`).join('')}
+                ${secondaryMeta.map(metric => `<span class="provider-model-status-chip">${escapeHtml(metric)}</span>`).join('')}
             </div>
         </div>
     `;
@@ -744,55 +861,71 @@ function renderProviderModelStatusPanel(providerType = currentProviderType) {
         ? currentProviderModelStatus
         : null;
     const entry = statusState?.entry || null;
-    const summary = entry?.summary || {};
-    const items = Array.isArray(entry?.items) ? entry.items.slice(0, 12) : [];
+    const summary = entry?.dashboardSummary || {};
+    const allItems = Array.isArray(entry?.items) ? entry.items : [];
+    const searchTerm = providerModelStatusSearchTerm.trim().toLowerCase();
+    const items = searchTerm
+        ? allItems.filter(item => String(item.modelId || '').toLowerCase().includes(searchTerm))
+        : allItems;
     const updatedAt = statusState?.updatedAt ? formatProviderDateTime(statusState.updatedAt) : '-';
-    const totalModels = summary.totalModels ?? items.length;
+    const timelineWindowHours = Number(statusState?.timelineWindowHours || 24) || 24;
+    const totalModels = summary.totalModels ?? allItems.length;
+    const qualityHint = translateOrFallback('modal.provider.modelStatus.highQualityHint', '成功率 >= 80%');
+    const subtitle = translateOrFallback(
+        'modal.provider.modelStatus.subtitle',
+        `最近 ${timelineWindowHours} 小时模型运行状态一览，监测所有请求（包括格式错误）`,
+        { hours: timelineWindowHours }
+    );
+    const throughputLabel = Number(summary.totalTokens || 0) > 0
+        ? translateOrFallback('modal.provider.modelStatus.totalTokens', 'Token总数')
+        : translateOrFallback('modal.provider.modelStatus.totalRequests', '请求总数');
+    const throughputValue = Number(summary.totalTokens || 0) > 0
+        ? formatCompactMetricNumber(summary.totalTokens)
+        : formatCompactMetricNumber(summary.requestCount);
+    const throughputHint = Number(summary.totalTokens || 0) > 0
+        ? translateOrFallback('modal.provider.modelStatus.totalTokensHint', `过去${timelineWindowHours}小时`, { hours: timelineWindowHours })
+        : translateOrFallback('modal.provider.modelStatus.totalRequestsHint', `过去${timelineWindowHours}小时`, { hours: timelineWindowHours });
+    const axisHtml = renderProviderModelStatusAxis(items.length > 0 ? items : allItems);
 
     return `
         <div class="provider-model-status-card ${providerModelStatusLoading ? 'is-loading' : ''}">
             <div class="provider-model-status-header">
-                <div class="provider-model-status-title">
-                    <i class="fas fa-heart-pulse"></i>
-                    <span>${escapeHtml(t('modal.provider.modelStatus.title'))}</span>
+                <div class="provider-model-status-title-block">
+                    <div class="provider-model-status-title">
+                        <i class="fas fa-heart-pulse"></i>
+                        <span>${escapeHtml(t('modal.provider.modelStatus.title'))}</span>
+                    </div>
+                    <div class="provider-model-status-subtitle">${escapeHtml(subtitle)}</div>
                 </div>
                 <span class="provider-model-status-updated">
                     ${escapeHtml(t('modal.provider.modelStatus.updatedAt'))}: ${escapeHtml(updatedAt)}
                 </span>
             </div>
             <div class="provider-model-status-grid">
-                <div class="provider-model-status-metric">
-                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.totalModels'))}</span>
-                    <span class="value">${totalModels}</span>
-                </div>
-                <div class="provider-model-status-metric">
-                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.healthyCount'))}</span>
-                    <span class="value">${summary.healthyCount ?? 0}</span>
-                </div>
-                <div class="provider-model-status-metric">
-                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.degradedCount'))}</span>
-                    <span class="value">${summary.degradedCount ?? 0}</span>
-                </div>
-                <div class="provider-model-status-metric">
-                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.failingCount'))}</span>
-                    <span class="value">${summary.failingCount ?? 0}</span>
-                </div>
-                <div class="provider-model-status-metric">
-                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.unknownCount'))}</span>
-                    <span class="value">${summary.unknownCount ?? 0}</span>
-                </div>
-                <div class="provider-model-status-metric">
-                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.successRate'))}</span>
-                    <span class="value">${escapeHtml(formatModelStatusRate(summary.successRate))}</span>
-                </div>
-                <div class="provider-model-status-metric">
-                    <span class="label">429</span>
-                    <span class="value">${summary.recent429Count ?? 0}</span>
-                </div>
-                <div class="provider-model-status-metric">
-                    <span class="label">${escapeHtml(t('modal.provider.modelStatus.streamInterrupted'))}</span>
-                    <span class="value">${summary.streamInterruptedCount ?? 0}</span>
-                </div>
+                ${renderProviderModelStatusMetricCard(
+                    translateOrFallback('modal.provider.modelStatus.monitoredModels', '监控模型数'),
+                    String(totalModels),
+                    `${summary.activeModels ?? 0} ${translateOrFallback('modal.provider.modelStatus.activeModelsHint', '个活跃模型')}`,
+                    'warm'
+                )}
+                ${renderProviderModelStatusMetricCard(
+                    t('modal.provider.modelStatus.successRate'),
+                    formatModelStatusRate(summary.successRate),
+                    translateOrFallback('modal.provider.modelStatus.successRateHint', `过去${timelineWindowHours}小时`, { hours: timelineWindowHours }),
+                    'good'
+                )}
+                ${renderProviderModelStatusMetricCard(
+                    throughputLabel,
+                    throughputValue,
+                    throughputHint,
+                    'gold'
+                )}
+                ${renderProviderModelStatusMetricCard(
+                    translateOrFallback('modal.provider.modelStatus.highQualityModels', '优良模型'),
+                    String(summary.highQualityCount ?? 0),
+                    qualityHint,
+                    'good'
+                )}
             </div>
             ${statusState?.fetchError ? `
                 <div class="provider-model-status-warning">
@@ -800,16 +933,44 @@ function renderProviderModelStatusPanel(providerType = currentProviderType) {
                     <span>${escapeHtml(t('modal.provider.modelStatus.fetchFailed'))}: ${escapeHtml(statusState.fetchError)}</span>
                 </div>
             ` : ''}
-            ${providerModelStatusLoading && items.length === 0 ? `
+            ${providerModelStatusLoading && allItems.length === 0 ? `
                 <div class="provider-model-status-empty">
                     <i class="fas fa-spinner fa-spin"></i>
                     <span>${escapeHtml(t('modal.provider.modelStatus.loading'))}</span>
                 </div>
             ` : ''}
-            ${!providerModelStatusLoading && items.length === 0 ? `
+            ${!providerModelStatusLoading && allItems.length === 0 ? `
                 <div class="provider-model-status-empty">
                     <i class="fas fa-wave-square"></i>
                     <span>${escapeHtml(t('modal.provider.modelStatus.empty'))}</span>
+                </div>
+            ` : ''}
+            ${allItems.length > 0 ? `
+                <div class="provider-model-status-toolbar">
+                    <div class="provider-model-status-legend">
+                        <span class="provider-model-status-legend-title">${escapeHtml(translateOrFallback('modal.provider.modelStatus.legend', '状态图例'))}</span>
+                        <span class="provider-model-status-legend-item"><span class="provider-model-status-dot grade-excellent"></span>${escapeHtml(formatTimelineGradeLabel('excellent'))}</span>
+                        <span class="provider-model-status-legend-item"><span class="provider-model-status-dot grade-good"></span>${escapeHtml(formatTimelineGradeLabel('good'))}</span>
+                        <span class="provider-model-status-legend-item"><span class="provider-model-status-dot grade-fair"></span>${escapeHtml(formatTimelineGradeLabel('fair'))}</span>
+                        <span class="provider-model-status-legend-item"><span class="provider-model-status-dot grade-poor"></span>${escapeHtml(formatTimelineGradeLabel('poor'))}</span>
+                        <span class="provider-model-status-legend-item"><span class="provider-model-status-dot grade-error"></span>${escapeHtml(formatTimelineGradeLabel('error'))}</span>
+                    </div>
+                    <div class="provider-model-status-search">
+                        <i class="fas fa-search"></i>
+                        <input
+                            type="text"
+                            value="${escapeHtml(providerModelStatusSearchTerm)}"
+                            placeholder="${escapeHtml(translateOrFallback('modal.provider.modelStatus.searchPlaceholder', '搜索模型...'))}"
+                            oninput="window.handleProviderModelStatusSearch(this.value)"
+                        >
+                    </div>
+                </div>
+                ${axisHtml}
+            ` : ''}
+            ${allItems.length > 0 && items.length === 0 ? `
+                <div class="provider-model-status-empty">
+                    <i class="fas fa-search"></i>
+                    <span>${escapeHtml(translateOrFallback('modal.provider.modelStatus.noSearchResults', '没有匹配的模型'))}</span>
                 </div>
             ` : ''}
             ${items.length > 0 ? `
@@ -1184,6 +1345,11 @@ async function fetchProviderModelStatusState(providerType, { silent = false } = 
     }
 }
 
+function handleProviderModelStatusSearch(value = '') {
+    providerModelStatusSearchTerm = String(value || '');
+    renderCurrentProviderPage();
+}
+
 /**
  * 显示提供商管理模态框
  * @param {Object} data - 提供商数据
@@ -1196,6 +1362,7 @@ function showProviderManagerModal(data, initialSearchTerm = '') {
     currentProviderSummary = {};
     currentProviderCatalog = null;
     currentProviderModelStatus = null;
+    providerModelStatusSearchTerm = '';
     currentSelectableCount = 0;
     currentBusyCount = 0;
     providerCatalogLoading = false;
@@ -3437,5 +3604,6 @@ window.showBatchUpdateModelsDialog = showBatchUpdateModelsDialog;
 window.openSupportedModelsPicker = openSupportedModelsPicker;
 window.refreshProviderCatalogForType = refreshProviderCatalogForType;
 window.retryProviderCatalogForType = retryProviderCatalogForType;
+window.handleProviderModelStatusSearch = handleProviderModelStatusSearch;
 window.goToProviderPage = goToProviderPage;
 window.refreshProviderUuid = refreshProviderUuid;

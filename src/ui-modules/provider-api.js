@@ -618,6 +618,8 @@ function getRuntimeModelRegistryPayload(currentConfig, providerPoolManager, prov
             version: 1,
             updatedAt: null,
             recentWindowSize: currentConfig?.MODEL_STATUS_RECENT_WINDOW_SIZE || null,
+            timelineWindowHours: currentConfig?.MODEL_STATUS_TIMELINE_WINDOW_HOURS || null,
+            timelineBucketMinutes: currentConfig?.MODEL_STATUS_TIMELINE_BUCKET_MINUTES || null,
             persistIntervalMs: currentConfig?.MODEL_STATUS_PERSIST_INTERVAL_MS || null,
             filePath: currentConfig?.MODEL_STATUS_CACHE_FILE_PATH || 'configs/model_status_cache.json',
             providers: {}
@@ -1639,6 +1641,8 @@ export async function handleGetModelStatus(req, res, currentConfig, providerPool
             version: 1,
             updatedAt: null,
             recentWindowSize: currentConfig?.MODEL_STATUS_RECENT_WINDOW_SIZE || null,
+            timelineWindowHours: currentConfig?.MODEL_STATUS_TIMELINE_WINDOW_HOURS || null,
+            timelineBucketMinutes: currentConfig?.MODEL_STATUS_TIMELINE_BUCKET_MINUTES || null,
             persistIntervalMs: currentConfig?.MODEL_STATUS_PERSIST_INTERVAL_MS || null,
             filePath: currentConfig?.MODEL_STATUS_CACHE_FILE_PATH || 'configs/model_status_cache.json',
             providers: {}
