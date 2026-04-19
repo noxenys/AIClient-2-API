@@ -569,7 +569,7 @@ export class GrokApiService {
         };
 
         const payload = {
-            "temporary": requestBody.temporary !== undefined ? requestBody.temporary : true,
+            "temporary": requestBody.temporary !== undefined ? requestBody.temporary : false,
             "message": message,
             "parentResponseId": requestBody.parentResponseId || undefined,
             "disableSearch": false,
@@ -1270,13 +1270,24 @@ export class GrokApiService {
     }
 
     _createStreamResumeState(existingState = null) {
-        return existingState || {
+        return Object.assign(existingState || {}, {
             primaryResponseId: null,
+            conversationId: null,
             emittedText: '',
             replayActive: false,
             replayText: '',
             replayOffset: 0
-        };
+        }, existingState || {});
+    }
+
+    _clearStreamReplay(state) {
+        if (!state) {
+            return;
+        }
+
+        state.replayActive = false;
+        state.replayText = '';
+        state.replayOffset = 0;
     }
 
     _prepareStreamReplay(state) {
@@ -1302,6 +1313,7 @@ export class GrokApiService {
             if (expectedChar !== actualChar) {
                 const expectedPreview = state.replayText.slice(state.replayOffset, state.replayOffset + 40);
                 const actualPreview = resp.token.slice(cursor, cursor + 40);
+                this._clearStreamReplay(state);
                 const error = new Error(`Grok stream resume diverged while replaying emitted prefix. expected='${expectedPreview}' actual='${actualPreview}'`);
                 error.code = 'GROK_STREAM_RESUME_MISMATCH';
                 error.status = 502;
@@ -1312,12 +1324,212 @@ export class GrokApiService {
         }
 
         if (state.replayOffset >= state.replayText.length) {
-            state.replayActive = false;
-            state.replayText = '';
-            state.replayOffset = 0;
+            this._clearStreamReplay(state);
         }
 
         resp.token = cursor >= resp.token.length ? '' : resp.token.slice(cursor);
+    }
+
+    _cloneRequestBody(requestBody) {
+        if (!requestBody || typeof requestBody !== 'object') {
+            return {};
+        }
+
+        if (typeof structuredClone === 'function') {
+            return structuredClone(requestBody);
+        }
+
+        return JSON.parse(JSON.stringify(requestBody));
+    }
+
+    _sliceTailForRepair(text, maxChars = 6000) {
+        if (typeof text !== 'string' || text.length === 0) {
+            return '';
+        }
+
+        return text.length <= maxChars ? text : text.slice(-maxChars);
+    }
+
+    _findTailRepairOverlap(previousText, repairedText, maxChars = 4000) {
+        if (typeof previousText !== 'string' || typeof repairedText !== 'string' || !previousText || !repairedText) {
+            return 0;
+        }
+
+        const previousTail = previousText.slice(-maxChars);
+        const maxOverlap = Math.min(previousTail.length, repairedText.length, maxChars);
+        for (let overlap = maxOverlap; overlap > 0; overlap--) {
+            if (previousTail.endsWith(repairedText.slice(0, overlap))) {
+                return overlap;
+            }
+        }
+
+        return 0;
+    }
+
+    _buildConversationTailRepairRequestBody(requestBody, emittedText, reqBaseUrl, resumeState) {
+        if (!resumeState?.conversationId || !resumeState?.primaryResponseId) {
+            return null;
+        }
+
+        const repairBody = this._cloneRequestBody(requestBody);
+        const assistantTail = this._sliceTailForRepair(emittedText);
+        const continueInstruction = [
+            'Continue your immediately previous assistant response from exactly the next token.',
+            'Use the already delivered tail below only as an anchor.',
+            'Output only the missing continuation.',
+            'Do not repeat, restart, summarize, quote, explain, or add a preface.',
+            '',
+            '<already-delivered-tail>',
+            assistantTail,
+            '</already-delivered-tail>'
+        ].join('\n');
+
+        repairBody._requestBaseUrl = reqBaseUrl;
+        repairBody._skipResumeTailRepair = true;
+        repairBody.n = 1;
+        repairBody.conversationId = resumeState.conversationId;
+        repairBody.parentResponseId = resumeState.primaryResponseId;
+        repairBody.message = continueInstruction;
+        repairBody.fileAttachments = [];
+        repairBody._uploadedFileAttachmentsPrepared = true;
+        delete repairBody.messages;
+        delete repairBody._extractedImages;
+        delete repairBody._extractedFiles;
+        delete repairBody.tool_choice;
+        delete repairBody.toolOverrides;
+        delete repairBody.responseMetadata;
+
+        if (Array.isArray(repairBody.tools) && repairBody.tools.length > 0) {
+            repairBody.tools = [];
+        }
+
+        return repairBody;
+    }
+
+    _buildStatelessTailRepairRequestBody(requestBody, emittedText, reqBaseUrl) {
+        const repairBody = this._cloneRequestBody(requestBody);
+        const assistantTail = this._sliceTailForRepair(emittedText);
+        const continueInstruction = [
+            'Continue the previous assistant response from exactly the next token.',
+            'Output only the missing continuation.',
+            'Do not repeat, restart, summarize, quote, explain, or add a preface.'
+        ].join(' ');
+
+        repairBody._requestBaseUrl = reqBaseUrl;
+        repairBody._skipResumeTailRepair = true;
+        repairBody.n = 1;
+        delete repairBody.parentResponseId;
+        delete repairBody.conversationId;
+        delete repairBody.tool_choice;
+        delete repairBody.toolOverrides;
+
+        if (Array.isArray(repairBody.tools) && repairBody.tools.length > 0) {
+            repairBody.tools = [];
+        }
+
+        if (Array.isArray(repairBody.messages) && repairBody.messages.length > 0) {
+            repairBody.messages = [
+                ...repairBody.messages,
+                { role: 'assistant', content: assistantTail },
+                { role: 'user', content: continueInstruction }
+            ];
+            delete repairBody.message;
+            delete repairBody._extractedImages;
+            delete repairBody._extractedFiles;
+        } else {
+            const originalMessage = typeof repairBody.message === 'string' ? repairBody.message : '';
+            repairBody.message = [
+                originalMessage,
+                '',
+                'assistant:',
+                assistantTail,
+                '',
+                'user:',
+                continueInstruction
+            ].join('\n');
+        }
+
+        return repairBody;
+    }
+
+    _buildSyntheticDoneChunk(responseId, requestBody, reqBaseUrl) {
+        const doneResult = { response: { isDone: true, responseId, _requestBaseUrl: reqBaseUrl, _uuid: this.uuid } };
+        attachGrokUsageEstimatePayload(doneResult, requestBody);
+        return { result: doneResult };
+    }
+
+    async _collectTailRepairResult(model, requestBody) {
+        const stream = this.generateContentStream(model, requestBody);
+        let message = '';
+        let lastError = null;
+
+        try {
+            for await (const chunk of stream) {
+                const token = chunk?.result?.response?.token;
+                if (typeof token === 'string' && token.length > 0) {
+                    message += token;
+                }
+            }
+        } catch (error) {
+            lastError = error;
+        }
+
+        if (lastError && !message) {
+            throw lastError;
+        }
+
+        return {
+            message,
+            partial: !!lastError,
+            error: lastError
+        };
+    }
+
+    async _repairInterruptedStreamTail(model, requestBody, emittedText, reqBaseUrl, resumeState = null) {
+        const repairAttempts = [];
+        const conversationRepairEnabled = process.env.GROK_ENABLE_CONVERSATION_TAIL_REPAIR === '1';
+        const conversationRepairBody = conversationRepairEnabled
+            ? this._buildConversationTailRepairRequestBody(requestBody, emittedText, reqBaseUrl, resumeState)
+            : null;
+        if (conversationRepairBody) {
+            repairAttempts.push({ mode: 'conversation', body: conversationRepairBody });
+        }
+        repairAttempts.push({
+            mode: 'stateless',
+            body: this._buildStatelessTailRepairRequestBody(requestBody, emittedText, reqBaseUrl)
+        });
+
+        let lastError = null;
+        for (const attempt of repairAttempts) {
+            try {
+                const collected = await this._collectTailRepairResult(model, attempt.body);
+                const repairedText = typeof collected?.message === 'string' ? collected.message : '';
+                const overlap = this._findTailRepairOverlap(emittedText, repairedText);
+                const deltaText = overlap > 0 ? repairedText.slice(overlap) : repairedText;
+
+                if (deltaText || attempt.mode === 'stateless') {
+                    if (collected?.partial && deltaText) {
+                        logger.warn(`[Grok API] ${attempt.mode} tail repair stream ended early; using partial repaired text (${deltaText.length} chars delta).`);
+                    }
+                    return { deltaText, overlap, repairedText, mode: attempt.mode };
+                }
+
+                logger.warn('[Grok API] Conversation-scoped tail repair returned no new text; falling back to stateless repair.');
+            } catch (error) {
+                lastError = error;
+                if (attempt.mode === 'conversation') {
+                    logger.warn(`[Grok API] Conversation-scoped tail repair failed; falling back to stateless repair. ${error.message}`);
+                    continue;
+                }
+                throw error;
+            }
+        }
+
+        if (lastError) {
+            throw lastError;
+        }
+
+        return { deltaText: '', overlap: 0, repairedText: '', mode: 'stateless' };
     }
 
     _createIncompleteStreamError(message, extra = {}) {
@@ -1333,6 +1545,8 @@ export class GrokApiService {
         const baseDelay = this.config.REQUEST_BASE_DELAY || 1000;
         let hasYieldedData = false;
         const resumeState = this._createStreamResumeState(streamResumeState);
+        let lastResponseId = uuidv4();
+        let reqBaseUrl = requestBody._requestBaseUrl;
 
         if (this.converter) {
             if (this.uuid) this.converter.setUuid(this.uuid);
@@ -1340,7 +1554,6 @@ export class GrokApiService {
         }
 
         if (requestBody._monitorRequestId) { this.config._monitorRequestId = requestBody._monitorRequestId; delete requestBody._monitorRequestId; }
-        const reqBaseUrl = requestBody._requestBaseUrl;
         if (requestBody._requestBaseUrl) delete requestBody._requestBaseUrl;
 
         if (this.isExpiryDateNear() && getProviderPoolManager() && this.uuid) {
@@ -1392,6 +1605,7 @@ export class GrokApiService {
 
         const isVideo = modelLower.includes('video');
         const headers = isVideo ? this.buildVideoHeaders() : this.buildHeaders();
+        let clearIdleTimer = () => {};
 
         try {
             const response = await this._request({
@@ -1405,13 +1619,44 @@ export class GrokApiService {
             });
             const rl = readline.createInterface({ input: response.data, terminal: false });
             const fallbackResponseId = uuidv4();
-            let lastResponseId = fallbackResponseId;
+            lastResponseId = fallbackResponseId;
             let grokStreamUsagePayloadAttached = false;
             let sawUpstreamDone = false;
+            const parsedIdleTimeout = Number.parseInt(this.config.GROK_STREAM_IDLE_TIMEOUT_MS, 10);
+            const streamIdleTimeoutMs = Number.isFinite(parsedIdleTimeout) && parsedIdleTimeout > 0
+                ? parsedIdleTimeout
+                : 8000;
+            let idleTimer = null;
+            let idleWatchArmed = false;
+            clearIdleTimer = () => {
+                if (idleTimer) {
+                    clearTimeout(idleTimer);
+                    idleTimer = null;
+                }
+            };
+            const resetIdleTimer = () => {
+                if (!idleWatchArmed) {
+                    return;
+                }
+                clearIdleTimer();
+                idleTimer = setTimeout(() => {
+                    const idleError = this._createIncompleteStreamError(`Grok stream stalled for ${streamIdleTimeoutMs}ms without new data`, {
+                        hasYieldedData,
+                        lastResponseId
+                    });
+                    response.data.destroy(idleError);
+                }, streamIdleTimeoutMs);
+                if (typeof idleTimer.unref === 'function') {
+                    idleTimer.unref();
+                }
+            };
 
             for await (const line of rl) {
                 const trimmed = line.trim();
                 if (!trimmed) continue;
+                if (idleWatchArmed) {
+                    resetIdleTimer();
+                }
                 let dataStr = trimmed.startsWith('data: ') ? trimmed.slice(6).trim() : trimmed;
                 if (dataStr === '[DONE]') {
                     sawUpstreamDone = true;
@@ -1419,6 +1664,13 @@ export class GrokApiService {
                 }
                 try {
                     const json = JSON.parse(dataStr);
+                    const upstreamConversationId =
+                        json.result?.conversation?.conversationId ||
+                        json.result?.response?.conversation?.conversationId ||
+                        null;
+                    if (!resumeState.conversationId && upstreamConversationId) {
+                        resumeState.conversationId = upstreamConversationId;
+                    }
                     if (json.result?.response) {
                         if (requestBody && !grokStreamUsagePayloadAttached) {
                             attachGrokUsageEstimatePayload(json.result, requestBody);
@@ -1436,6 +1688,9 @@ export class GrokApiService {
                         }
                         resp._requestBaseUrl = reqBaseUrl;
                         resp._uuid = this.uuid;
+                        if (resumeState.conversationId) {
+                            resp._conversationId = resumeState.conversationId;
+                        }
                         if (resp.isDone) {
                             sawUpstreamDone = true;
                         }
@@ -1513,6 +1768,10 @@ export class GrokApiService {
                         }
                         if (resp.token) {
                             resumeState.emittedText += resp.token;
+                            if (!idleWatchArmed) {
+                                idleWatchArmed = true;
+                            }
+                            resetIdleTimer();
                         }
                         lastResponseId = resp.responseId || lastResponseId;
                     }
@@ -1542,11 +1801,61 @@ export class GrokApiService {
                 }
                 this._grokLastStreamJsonForDebug = null;
             }
-            const doneResult = { response: { isDone: true, responseId: lastResponseId, _requestBaseUrl: reqBaseUrl, _uuid: this.uuid } };
-            attachGrokUsageEstimatePayload(doneResult, requestBody);
-            yield { result: doneResult };
+            clearIdleTimer();
+            yield this._buildSyntheticDoneChunk(lastResponseId, requestBody, reqBaseUrl);
         } catch (error) {
+            if (typeof clearIdleTimer === 'function') {
+                clearIdleTimer();
+            }
             const { status, errorCode, errorMessage, isNetworkError } = this.classifyApiError(error);
+            const hasEmittedPrefix = typeof resumeState.emittedText === 'string' && resumeState.emittedText.length > 0;
+            const effectiveResponseId = resumeState.primaryResponseId || lastResponseId;
+            if (error?.code === 'GROK_STREAM_RESUME_MISMATCH' && hasEmittedPrefix) {
+                this._clearStreamReplay(resumeState);
+                const canAttemptTailRepair =
+                    !requestBody._skipResumeTailRepair &&
+                    retryCount < maxRetries &&
+                    !isImagine &&
+                    !isVideo;
+
+                if (canAttemptTailRepair) {
+                    try {
+                        const { deltaText, overlap, mode } = await this._repairInterruptedStreamTail(
+                            model,
+                            requestBody,
+                            resumeState.emittedText,
+                            reqBaseUrl,
+                            resumeState
+                        );
+                        if (deltaText) {
+                            logger.warn(`[Grok API] Resume mismatch after partial output. ${mode} tail repair appended ${deltaText.length} chars (overlap=${overlap}). ${error.message}`);
+                            resumeState.emittedText += deltaText;
+                            yield {
+                                result: {
+                                    response: {
+                                        token: deltaText,
+                                        responseId: effectiveResponseId,
+                                        _requestBaseUrl: reqBaseUrl,
+                                        _uuid: this.uuid,
+                                        _conversationId: resumeState.conversationId || undefined
+                                    }
+                                }
+                            };
+                        } else {
+                            logger.warn(`[Grok API] Resume mismatch after partial output. ${mode} tail repair returned no new text; ending stream gracefully. ${error.message}`);
+                        }
+                        yield this._buildSyntheticDoneChunk(effectiveResponseId, requestBody, reqBaseUrl);
+                        return;
+                    } catch (repairError) {
+                        logger.warn(`[Grok API] Tail repair failed after resume mismatch. Returning emitted prefix only. ${repairError.message}`);
+                    }
+                } else {
+                    logger.warn(`[Grok API] Resume mismatch after partial output. Tail repair skipped; ending stream gracefully. ${error.message}`);
+                }
+
+                yield this._buildSyntheticDoneChunk(effectiveResponseId, requestBody, reqBaseUrl);
+                return;
+            }
             const canRetryInRequest = !hasYieldedData && retryCount < maxRetries;
             const canResumeInterruptedStream =
                 hasYieldedData &&
@@ -1561,6 +1870,43 @@ export class GrokApiService {
                     status === 429 ||
                     (status >= 500 && status < 600)
                 );
+
+            const canDirectTailRepairAfterInterruption =
+                canResumeInterruptedStream &&
+                !requestBody._skipResumeTailRepair;
+
+            if (canDirectTailRepairAfterInterruption) {
+                try {
+                    const { deltaText, overlap, mode } = await this._repairInterruptedStreamTail(
+                        model,
+                        requestBody,
+                        resumeState.emittedText,
+                        reqBaseUrl,
+                        resumeState
+                    );
+                    if (deltaText) {
+                        logger.warn(`[Grok API] Stream interrupted after partial output. ${mode} tail repair appended ${deltaText.length} chars (overlap=${overlap}) after ${error.message}`);
+                        resumeState.emittedText += deltaText;
+                        yield {
+                            result: {
+                                response: {
+                                    token: deltaText,
+                                    responseId: effectiveResponseId,
+                                    _requestBaseUrl: reqBaseUrl,
+                                    _uuid: this.uuid,
+                                    _conversationId: resumeState.conversationId
+                                }
+                            }
+                        };
+                    } else {
+                        logger.warn(`[Grok API] Stream interrupted after partial output. ${mode} tail repair returned no new text; ending stream gracefully. ${error.message}`);
+                    }
+                    yield this._buildSyntheticDoneChunk(effectiveResponseId, requestBody, reqBaseUrl);
+                    return;
+                } catch (repairError) {
+                    logger.warn(`[Grok API] Direct tail repair after interrupted stream failed; falling back to replay retry. ${repairError.message}`);
+                }
+            }
 
             if (canResumeInterruptedStream && this._prepareStreamReplay(resumeState)) {
                 const delay = baseDelay * Math.pow(2, retryCount);
