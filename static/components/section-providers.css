@@ -2382,6 +2382,12 @@
 [data-theme="dark"] .supported-models-empty { color: var(--text-secondary); }
 [data-theme="dark"] .provider-model-picker-empty { background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-secondary); }
 [data-theme="dark"] .provider-model-picker-search { background: var(--bg-secondary); border-color: var(--border-color); color: var(--text-primary); }
+[data-theme="dark"] .provider-catalog-warning {
+    background: rgba(127, 29, 29, 0.24) !important;
+    border-color: rgba(248, 113, 113, 0.24) !important;
+    color: #fecaca !important;
+}
+
 [data-theme="dark"] .provider-model-picker-item { background: var(--bg-primary); border-color: var(--border-color); color: var(--text-primary); }
 [data-theme="dark"] .provider-model-picker-item:hover { background: var(--bg-tertiary); border-color: var(--primary-color); }
 [data-theme="dark"] .provider-model-picker-item span { color: var(--text-primary); }
@@ -2396,4 +2402,33 @@
 
 [data-theme="dark"] .highlight-note i {
     color: var(--warning-color);
+}
+[data-theme="dark"] .provider-model-status-warning {
+    background: rgba(127, 29, 29, 0.24) !important;
+    border-color: rgba(248, 113, 113, 0.24) !important;
+    color: #fecaca !important;
+}
+
+[data-theme="dark"] .provider-model-status-badge.status-healthy {
+    background: rgba(6, 78, 59, 0.34) !important;
+    border-color: rgba(52, 211, 153, 0.28) !important;
+    color: #a7f3d0 !important;
+}
+
+[data-theme="dark"] .provider-model-status-badge.status-degraded {
+    background: rgba(120, 53, 15, 0.34) !important;
+    border-color: rgba(251, 191, 36, 0.26) !important;
+    color: #fde68a !important;
+}
+
+[data-theme="dark"] .provider-model-status-badge.status-failing {
+    background: rgba(127, 29, 29, 0.34) !important;
+    border-color: rgba(248, 113, 113, 0.24) !important;
+    color: #fecaca !important;
+}
+
+[data-theme="dark"] .provider-model-status-badge.status-unknown {
+    background: rgba(30, 41, 59, 0.82) !important;
+    border-color: rgba(148, 163, 184, 0.16) !important;
+    color: var(--text-secondary) !important;
 }

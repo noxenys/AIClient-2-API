@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'fs';
 import logger from '../utils/logger.js';
 import { getRequestBody } from '../utils/common.js';
 import {
+    getPreferredHealthCheckModel,
     getConfiguredSupportedModels,
     getProviderModels,
     normalizeModelIds,
@@ -839,10 +840,15 @@ function applyDetectedModelsPatch(providerType, provider, models = [], {
     provider.supportedModelsDetectionStatus = detectionError ? 'error' : 'success';
     provider.supportedModelsDetectionError = detectionError || null;
 
-    if (normalizedModels.length > 0 && !provider.checkModelName) {
-        provider.checkModelName = normalizedModels.find(model =>
-            model.includes('flash') || model.includes('mini') || model.includes('haiku') || model.includes('small')
-        ) || normalizedModels[0];
+    const preferredCheckModel = getPreferredHealthCheckModel(
+        providerType,
+        normalizedModels,
+        provider.checkModelName
+    );
+    if (preferredCheckModel &&
+        preferredCheckModel !== provider.checkModelName &&
+        (!provider.checkModelName || !normalizedModels.includes(provider.checkModelName))) {
+        provider.checkModelName = preferredCheckModel;
     }
 
     return {
@@ -887,12 +893,18 @@ async function runProviderHealthCheck(providerPoolManager, providerType, provide
     const providerConfig = providerStatus.config;
 
     try {
-        let checkModelName = providerConfig.checkModelName;
         const supportedModels = getConfiguredSupportedModels(providerType, providerConfig);
-        if (!checkModelName && supportedModels.length > 0) {
-            checkModelName = supportedModels.find(m =>
-                m.includes('flash') || m.includes('mini') || m.includes('3.5') || m.includes('small')
-            ) || supportedModels[0];
+        const checkModelName = getPreferredHealthCheckModel(
+            providerType,
+            supportedModels,
+            providerConfig.checkModelName
+        );
+        if (checkModelName &&
+            checkModelName !== providerConfig.checkModelName &&
+            (!providerConfig.checkModelName || !supportedModels.includes(providerConfig.checkModelName))) {
+            providerConfig.checkModelName = checkModelName;
+        }
+        if (checkModelName) {
             logger.info(`[UI API] Selected model ${checkModelName} for health check of provider ${providerConfig.uuid}`);
         }
 

@@ -143,6 +143,90 @@ export const PROVIDER_MODELS = {
 };
 
 export const MANAGED_MODEL_LIST_PROVIDERS = [
+export const DEFAULT_PROVIDER_HEALTH_CHECK_MODELS = Object.freeze({
+    'gemini-cli-oauth': 'gemini-2.5-flash',
+    'gemini-antigravity': 'gemini-2.5-flash',
+    'openai-custom': 'gpt-4o-mini',
+    'claude-custom': 'claude-3-7-sonnet-20250219',
+    'claude-kiro-oauth': 'claude-haiku-4-5',
+    'openai-qwen-oauth': 'qwen3-coder-flash',
+    'openai-iflow': 'qwen3-coder-plus',
+    'openai-codex-oauth': 'gpt-5-codex-mini',
+    'openaiResponses-custom': 'gpt-4o-mini',
+    'forward-api': 'gpt-4o-mini',
+    'grok-custom': 'grok-4.20'
+});
+
+const LIGHTWEIGHT_HEALTH_CHECK_HINTS = ['flash', 'mini', 'haiku', 'small', 'nano', 'lite', 'fast', '3.5'];
+const PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES = Object.freeze({
+    'grok-custom': [
+        'grok-4.20',
+        'grok-4.20-auto',
+        'grok-4.20-fast',
+        'grok-4.20-expert',
+        'grok-4.20-heavy',
+        'grok-4.1-mini',
+        'grok-4.1-thinking'
+    ]
+});
+
+function getProviderSpecificPreferenceList(providerType = '') {
+    const direct = PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES[providerType];
+    if (direct) {
+        return direct;
+    }
+
+    const baseType = Object.keys(PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES).find(key =>
+        providerType === key || providerType.startsWith(`${key}-`)
+    );
+    return baseType ? PROVIDER_HEALTH_CHECK_MODEL_PREFERENCES[baseType] : [];
+}
+
+export function getDefaultHealthCheckModel(providerType = '') {
+    const direct = DEFAULT_PROVIDER_HEALTH_CHECK_MODELS[providerType];
+    if (direct) {
+        return direct;
+    }
+
+    const baseType = Object.keys(DEFAULT_PROVIDER_HEALTH_CHECK_MODELS).find(key =>
+        providerType === key || providerType.startsWith(`${key}-`)
+    );
+    return baseType ? DEFAULT_PROVIDER_HEALTH_CHECK_MODELS[baseType] : '';
+}
+
+export function getPreferredHealthCheckModel(providerType, models = [], currentCheckModel = '') {
+    const normalizedModels = normalizeModelIds(models);
+    const normalizedCurrent = typeof currentCheckModel === 'string' ? currentCheckModel.trim() : '';
+
+    if (normalizedCurrent && normalizedModels.includes(normalizedCurrent)) {
+        return normalizedCurrent;
+    }
+
+    const defaultModel = getDefaultHealthCheckModel(providerType);
+    if (defaultModel && (normalizedModels.length === 0 || normalizedModels.includes(defaultModel))) {
+        return defaultModel;
+    }
+
+    if (normalizedCurrent && normalizedModels.length === 0) {
+        return normalizedCurrent;
+    }
+
+    const providerSpecificModel = getProviderSpecificPreferenceList(providerType)
+        .find(model => normalizedModels.includes(model));
+    if (providerSpecificModel) {
+        return providerSpecificModel;
+    }
+
+    const lightweightModel = normalizedModels.find(model =>
+        LIGHTWEIGHT_HEALTH_CHECK_HINTS.some(hint => model.includes(hint))
+    );
+    if (lightweightModel) {
+        return lightweightModel;
+    }
+
+    return normalizedModels[0] || normalizedCurrent || defaultModel || '';
+}
+
     'openai-custom',
     'openaiResponses-custom',
     'claude-custom',

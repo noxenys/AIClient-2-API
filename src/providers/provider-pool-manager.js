@@ -4,8 +4,10 @@ import logger from '../utils/logger.js';
 import { MODEL_PROVIDER, getProtocolPrefix } from '../utils/common.js';
 import { convertData } from '../convert/convert.js';
 import {
+    DEFAULT_PROVIDER_HEALTH_CHECK_MODELS,
     getConfiguredSupportedModels,
     getCustomModelListProvider,
+    getPreferredHealthCheckModel,
     getProviderModels,
     normalizeModelIds
 } from './provider-models.js';
@@ -57,16 +59,7 @@ export class ProviderPoolManager {
     // 默认健康检查模型配置
     // 键名必须与 MODEL_PROVIDER 常量值一致
     static DEFAULT_HEALTH_CHECK_MODELS = {
-        'gemini-cli-oauth': 'gemini-2.5-flash',
-        'gemini-antigravity': 'gemini-2.5-flash',
-        'openai-custom': 'gpt-4o-mini',
-        'claude-custom': 'claude-3-7-sonnet-20250219',
-        'claude-kiro-oauth': 'claude-haiku-4-5',
-        'openai-qwen-oauth': 'qwen3-coder-flash',
-        'openai-iflow': 'qwen3-coder-plus',
-        'openai-codex-oauth': 'gpt-5-codex-mini',
-        'openaiResponses-custom': 'gpt-4o-mini',
-        'forward-api': 'gpt-4o-mini',
+        ...DEFAULT_PROVIDER_HEALTH_CHECK_MODELS
     };
 
     constructor(providerPools, options = {}) {
@@ -2524,11 +2517,12 @@ export class ProviderPoolManager {
         
         for (const { providerType, provider, uuid, customName } of providersToCheck) {
             const providerCheckStart = Date.now();
-            const baseProviderType = this._getBaseProviderType(providerType);
-            const checkModelName = provider.config.checkModelName || 
-                                ProviderPoolManager.DEFAULT_HEALTH_CHECK_MODELS[providerType] || 
-                                ProviderPoolManager.DEFAULT_HEALTH_CHECK_MODELS[baseProviderType] || 
-                                'unknown';
+            const supportedModels = getConfiguredSupportedModels(providerType, provider.config);
+            const checkModelName = getPreferredHealthCheckModel(
+                providerType,
+                supportedModels,
+                provider.config.checkModelName
+            ) || 'unknown';
             const displayName = customName || uuid.substring(0, 8);
 
             try {
@@ -2657,10 +2651,18 @@ export class ProviderPoolManager {
      */
     async _checkProviderHealth(providerType, providerConfig) {
         // 确定健康检查使用的模型名称
-        const baseProviderType = this._getBaseProviderType(providerType);
-        const modelName = providerConfig.checkModelName ||
-                        ProviderPoolManager.DEFAULT_HEALTH_CHECK_MODELS[providerType] ||
-                        ProviderPoolManager.DEFAULT_HEALTH_CHECK_MODELS[baseProviderType];
+        const configuredModels = getConfiguredSupportedModels(providerType, providerConfig);
+        const modelName = getPreferredHealthCheckModel(
+            providerType,
+            configuredModels,
+            providerConfig.checkModelName
+        );
+
+        if (modelName &&
+            modelName !== providerConfig.checkModelName &&
+            (!providerConfig.checkModelName || !configuredModels.includes(providerConfig.checkModelName))) {
+            providerConfig.checkModelName = modelName;
+        }
 
         if (!modelName) {
             this._log('warn', `Unknown provider type for health check: ${providerType}. Please check DEFAULT_HEALTH_CHECK_MODELS.`);
