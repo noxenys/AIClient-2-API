@@ -24,6 +24,16 @@ function parsePositiveIntEnv(name) {
     return parsedValue;
 }
 
+function parseStringEnv(name) {
+    const rawValue = process.env[name];
+    if (rawValue == null) {
+        return null;
+    }
+
+    const trimmedValue = String(rawValue).trim();
+    return trimmedValue === '' ? null : trimmedValue;
+}
+
 function applyEnvironmentOverrides(config) {
     const platformPort = parsePositiveIntEnv('PORT');
     const configuredServerPort = parsePositiveIntEnv('SERVER_PORT');
@@ -38,6 +48,28 @@ function applyEnvironmentOverrides(config) {
         config.SERVER_PORT = configuredServerPort;
         logger.info(`[Config] Using SERVER_PORT from environment: ${configuredServerPort}`);
     }
+
+    const stringOverrideKeys = [
+        'HOST',
+        'REQUIRED_API_KEY',
+        'MODEL_PROVIDER',
+        'SYSTEM_PROMPT_FILE_PATH',
+        'PROVIDER_POOLS_FILE_PATH',
+        'CUSTOM_MODELS_FILE_PATH',
+        'PROVIDER_CATALOG_CACHE_FILE_PATH',
+        'MODEL_STATUS_CACHE_FILE_PATH',
+        'LOG_DIR'
+    ];
+
+    stringOverrideKeys.forEach((key) => {
+        const value = parseStringEnv(key);
+        if (value == null) {
+            return;
+        }
+
+        config[key] = value;
+        logger.info(`[Config] Using ${key} from environment: ${value}`);
+    });
 }
 
 function normalizeConfiguredProviders(config) {
@@ -143,11 +175,13 @@ export async function initializeConfig(args = process.argv.slice(2), configFileP
     };
 
     let currentConfig = { ...defaultConfig };
+    currentConfig.CONFIG_FILE_PATH = configFilePath;
 
     try {
         const configData = fs.readFileSync(configFilePath, 'utf8');
         const loadedConfig = JSON.parse(configData);
         Object.assign(currentConfig, loadedConfig);
+        currentConfig.CONFIG_FILE_PATH = configFilePath;
         logger.info('[Config] Loaded configuration from configs/config.json');
     } catch (error) {
         if (error.code !== 'ENOENT') {

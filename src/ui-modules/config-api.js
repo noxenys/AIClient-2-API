@@ -18,10 +18,11 @@ import { HEALTH_CHECK, PASSWORD, NETWORK, RETRY } from '../utils/constants.js';
 export async function reloadConfig(providerPoolManager) {
     try {
         // Import config manager dynamically
-        const { initializeConfig } = await import('../core/config-manager.js');
+        const { initializeConfig, CONFIG } = await import('../core/config-manager.js');
         
         // Reload main config
-        const newConfig = await initializeConfig(process.argv.slice(2), 'configs/config.json');
+        const configFilePath = CONFIG.CONFIG_FILE_PATH || 'configs/config.json';
+        const newConfig = await initializeConfig(process.argv.slice(2), configFilePath);
         // Update provider pool manager if available
         if (providerPoolManager) {
             providerPoolManager.providerPools = newConfig.providerPools;
@@ -296,7 +297,7 @@ export async function handleUpdateConfig(req, res, currentConfig) {
 
         // Update config.json file
         try {
-            const configPath = 'configs/config.json';
+            const configPath = currentConfig.CONFIG_FILE_PATH || 'configs/config.json';
             
             // Create a clean config object for saving (exclude runtime-only properties)
             const configToSave = {
